@@ -4,3 +4,7 @@
 [submodule "drivers"]
 	path = drivers
 	url = https://github.com/vsergeev/c-periphery.git
+[submodule "u8g2"]
+	path = u8g2
+	url = https://github.com/tsy2001/u8g2.git
+	branch = cdplayer-bsp
