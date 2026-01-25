@@ -343,7 +343,7 @@ void readCDInfo(APP_CDIO *pCDIO)
                 printf("%d: %s - %s\n", i, pCDIO->album_artist[i] ? pCDIO->album_artist[i] : "Unknown", pCDIO->album_info[i] ? pCDIO->album_info[i] : "Unknown");
             }
             // 使用nero或ONES软件刻录的光盘，title一般都是Music或Audio，中文编码乱码，所以不要显示cd text
-            if (strstr(pCDIO->album_info[0], "Music") || strstr(pCDIO->album_info[0], "Audio"))
+            if (pCDIO->album_info[0] != NULL && (strstr(pCDIO->album_info[0], "Music") || strstr(pCDIO->album_info[0], "Audio")))
             {
                 pCDIO->album_ready_flag = 0;
             }
