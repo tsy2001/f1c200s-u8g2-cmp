@@ -214,7 +214,7 @@ void readCDInfo(APP_CDIO *pCDIO)
             pCDIO->cdda_ready_flag = 0;
             pthread_mutex_unlock(&pCDIO->lock);
             printf("CD handle is NULL when reading track info\n");
-            sleep_ms(1800);
+            sleep(2);
             if (++attempts > 5)
                 return; // 放弃读取
             continue;
@@ -232,7 +232,7 @@ void readCDInfo(APP_CDIO *pCDIO)
             pCDIO->cdda_ready_flag = 0;
             pthread_mutex_unlock(&pCDIO->lock);
             printf("Failed to get CD track info\n");
-            sleep_ms(1800);
+            sleep(2);
             if (++attempts > 5)
                 return;
             continue;
@@ -405,6 +405,10 @@ void readCDInfo(APP_CDIO *pCDIO)
         else
         {   // 没有切歌操作，继续下一首
             pCDIO->now_tracks += 1;
+            if (pCDIO->now_tracks > pCDIO->total_tracks + 1)
+            {
+                pCDIO->now_tracks = 2;
+            }
         }
         pthread_mutex_unlock(&pCDIO->lock);
 
@@ -412,7 +416,7 @@ void readCDInfo(APP_CDIO *pCDIO)
         if (res)
         {
             printf("Play CD track error\n");
-            break;
+            return;
         }
 
         pthread_mutex_lock(&pCDIO->lock);
@@ -445,7 +449,7 @@ void *cd_player_thread_entry(void *arg)
         if (!cd)
         {
             printf("Failed to open CD \n");
-            sleep_ms(1800);
+            sleep(2);
             continue;
         }
 
@@ -454,7 +458,7 @@ void *cd_player_thread_entry(void *arg)
         {
             printf("Waiting for disc...\n");
             cdio_destroy(cd);
-            sleep_ms(1800);
+            sleep(2);
             continue;
         }
 
@@ -515,24 +519,28 @@ void *cd_player_thread_entry(void *arg)
             printf("Eject complete\n");
 
             pthread_mutex_lock(&app_cdio.lock);
+            app_cdio.album_ready_flag = 0;
             app_cdio.ejct = 0;
             app_cdio.eject_in_progress = 0;
-            if (app_cdio.cdio != NULL)
-                cdio_destroy(app_cdio.cdio);
+            // todo: 如何正确释放cdio资源？添加会导致Segmentation fault错误
+            // if (app_cdio.cdio != NULL)
+            //     cdio_destroy(app_cdio.cdio);
             app_cdio.cdio = NULL;
             pthread_mutex_unlock(&app_cdio.lock);
         }
         else if(app_cdio.disc_mode == CDIO_DISC_MODE_CD_DA)
-        {   // 如果是CD—DA光碟，走到这一部也没有弹出请求，那么说明所有曲目都播放一遍了，关闭cdio从头再来一遍，循环播放
+        {   // 如果是CD—DA光碟，走到这一部也没有弹出请求，那么说明音轨读取错误，关闭cdio从头再来一遍
             cdio_close_tray(OPTICAL_DEVICE, NULL);
             pthread_mutex_lock(&app_cdio.lock);
-            if (app_cdio.cdio != NULL)
-                cdio_destroy(app_cdio.cdio);
+            // todo: 如何正确释放cdio资源？添加会导致Segmentation fault错误
+            // if (app_cdio.cdio != NULL)
+            //     cdio_destroy(app_cdio.cdio);
+            app_cdio.album_ready_flag = 0;
             app_cdio.cdio = NULL;
             pthread_mutex_unlock(&app_cdio.lock);
         }
-        
-        sleep_ms(1800);
+
+        sleep(2);
     }
 
     return NULL;
