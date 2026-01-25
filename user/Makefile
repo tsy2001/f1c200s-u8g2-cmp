@@ -1,51 +1,75 @@
-CC=arm-buildroot-linux-musleabi-gcc
-SYSROOT=/home/tsy/F1C200S/flash/buildroot-2025.02.9/output/host/arm-buildroot-linux-musleabi/sysroot
+CC=arm-buildroot-linux-uclibcgnueabi-gcc
+SYSROOT=/home/tsy/F1C200S/flash/buildroot-2025.02.9/output/host/arm-buildroot-linux-uclibcgnueabi/sysroot
 
 TARGET=u8g2_hw_i2c_dvd
-IDIR= -I ./ -I ../drivers/src -I ../u8g2/csrc -I ../u8g2/sys/arm-linux/port -I ../hardware/BEEP -I ../hardware/I2C -I ../hardware/MPU6050 -I ../dr_libs
-SRCDIR=../u8g2/csrc
-OBJDIR=../output/obj
-OUTDIR=../output/bin
-LDIR= --sysroot=$(SYSROOT) -lrt -lasound -lcdio -lpthread
-LIBS=  -lm
 
-CFLAGS= $(IDIR) --sysroot=$(SYSROOT) -std=c99 -lrt -W -Wall -D__ARM_LINUX__
+ROOT := $(abspath ..)
 
-OBJ+=u8g2_hw_i2c.o\
-	dvdplayer.o\
-	dr_libs_impl.o\
-	app_button.o\
-	app_u8g2.o\
-	app_cdplayer.o\
-	../u8g2/sys/arm-linux/port/u8g2port.o\
-	../drivers/src/gpio.o\
-	../drivers/src/gpio_sysfs.o\
-	../drivers/src/led.o\
-	../drivers/src/spi.o\
-	../drivers/src/i2c.o\
-	../drivers/src/pwm.o\
-	../hardware/BEEP/beep.o\
+OBJDIR := $(ROOT)/output/obj
+OUTDIR := $(ROOT)/output/bin
 
-OBJ+=$(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o, $(wildcard $(SRCDIR)/*.c))
+CPPFLAGS := \
+  -I$(CURDIR) \
+  -I$(ROOT)/drivers/src \
+  -I$(ROOT)/u8g2/csrc \
+  -I$(ROOT)/u8g2/sys/arm-linux/port \
+  -I$(ROOT)/hardware/BEEP \
+  -I$(ROOT)/hardware/I2C \
+  -I$(ROOT)/hardware/MPU6050 \
+  -I$(ROOT)/dr_libs \
+  -D__ARM_LINUX__
 
-all: directories $(TARGET) 
+CFLAGS  := --sysroot=$(SYSROOT) -std=c99 -W -Wall -MMD -MP -D_POSIX_C_SOURCE=200809L
+LDFLAGS := --sysroot=$(SYSROOT)
+LDLIBS  := -lrt -lasound -lcdio -lpthread -lm
+
+LOCAL_SRCS := \
+  u8g2_hw_i2c.c \
+  dvdplayer.c \
+  dr_libs_impl.c \
+  app_button.c \
+  app_u8g2.c \
+  app_cdplayer.c
+
+ROOT_SRCS := \
+  u8g2/sys/arm-linux/port/u8g2port.c \
+  drivers/src/gpio.c \
+  drivers/src/gpio_sysfs.c \
+  drivers/src/led.c \
+  drivers/src/spi.c \
+  drivers/src/i2c.c \
+  drivers/src/pwm.c \
+  hardware/BEEP/beep.c
+
+U8G2_CSRCS := $(patsubst $(ROOT)/%,%,$(wildcard $(ROOT)/u8g2/csrc/*.c))
+
+SRCS := $(LOCAL_SRCS) $(ROOT_SRCS) $(U8G2_CSRCS)
+
+OBJS := $(patsubst %.c,$(OBJDIR)/%.o,$(SRCS))
+DEPS := $(OBJS:.o=.d)
+
+VPATH := $(CURDIR) $(ROOT)
+
+.PHONY: all clean directories
+
+all: directories $(TARGET)
 
 directories:
 	@mkdir -p $(OBJDIR)
 	@mkdir -p $(OUTDIR)
 
-$(TARGET):$(OBJ)
+$(TARGET): $(OBJS)
 	@echo Generating $(TARGET) ...
-	@$(CC) -o $(OUTDIR)/$@ $(OBJ) $(LDIR) $(LIBS)
+	@$(CC) -o $(OUTDIR)/$@ $^ $(LDFLAGS) $(LDLIBS)
 
-$(OBJDIR)/%.o: $(SRCDIR)/%.c
-	$(CC) -c -o $@ $< $(CFLAGS) $(LDIR) $(LIBS)
+$(OBJDIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+-include $(DEPS)
 
 clean:
 	@echo RM -rf $(OBJDIR)/
-	@rm -rf $(OBJ)
 	@rm -rf $(OBJDIR)
-	
 	@echo RM -rf $(OUTDIR)/
 	@rm -rf $(OUTDIR)
-
