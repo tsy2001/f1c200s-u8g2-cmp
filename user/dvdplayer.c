@@ -222,13 +222,15 @@ int mount_dvd(const char *dev)
         }
     }
 
-    if (mount(dev, MOUNT_POINT, "iso9660", MS_RDONLY, NULL) != 0)
+    const char *fstypes[] = {"udf", "iso9660"};
+    for (size_t i = 0; i < sizeof(fstypes) / sizeof(fstypes[0]); i++)
     {
-        perror("Failed to mount DVD");
-        return -1;
+        if (mount(dev, MOUNT_POINT, fstypes[i], MS_RDONLY, NULL) == 0)
+            return 0;
+        perror("Failed to mount DVD by: %s", fstypes[i]);
     }
 
-    return 0;
+    return -1;
 }
 
 // 获取音频文件的数量，并返回文件路径数组
