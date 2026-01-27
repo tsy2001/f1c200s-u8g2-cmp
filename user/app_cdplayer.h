@@ -55,6 +55,6 @@ void app_cdio_toggle_stop(void);
 void app_cdio_adjust_volume(float delta);
 void app_cdio_set_mute(bool mute);
 /* cdio usage reference counting (thread-safe) */
-void app_cdio_acquire_cdio(void);
+CdIo *app_cdio_acquire_cdio(void);
 void app_cdio_release_cdio(void);
 #endif

@@ -47,15 +47,6 @@ uint8_t playCDTrack(APP_CDIO *pCDIO, track_t track)
     unsigned char buffer[BUFFER_SIZE];
     unsigned char tmpbuf[BUFFER_SIZE];
 
-    pthread_mutex_lock(&pCDIO->lock);
-    CdIo *cd = pCDIO->cdio;
-    pthread_mutex_unlock(&pCDIO->lock);
-    if (!cd)
-    {
-        printf("playCDTrack: cdio is NULL\n");
-        return 1;
-    }
-
     // 检查是否有弹出光碟请求
     pthread_mutex_lock(&pCDIO->lock);
     if (pCDIO->ejct || pCDIO->eject_in_progress)
@@ -66,7 +57,12 @@ uint8_t playCDTrack(APP_CDIO *pCDIO, track_t track)
     }
     pthread_mutex_unlock(&pCDIO->lock);
 
-    app_cdio_acquire_cdio();
+    CdIo *cd = app_cdio_acquire_cdio();
+    if (!cd)
+    {
+        printf("playCDTrack: cdio is NULL\n");
+        return 1;
+    }
     // 获取音轨起始和结束LSN
     lsn_t start_lsn = cdio_get_track_lsn(cd, track);
     lsn_t last_lsn = cdio_get_track_last_lsn(cd, track);
@@ -98,9 +94,14 @@ uint8_t playCDTrack(APP_CDIO *pCDIO, track_t track)
         pthread_mutex_unlock(&pCDIO->lock);
 
         // 使用libcdio读取音轨LSN
-        app_cdio_acquire_cdio();
+        CdIo *cd_read = app_cdio_acquire_cdio();
+        if (!cd_read)
+        {
+            printf("playCDTrack: cdio is NULL during read\n");
+            return 1;
+        }
         pCDIO->scsi_read_flag = 1;
-        driver_return_code_t rc = cdio_read_audio_sector(cd, buffer, start_lsn);
+        driver_return_code_t rc = cdio_read_audio_sector(cd_read, buffer, start_lsn);
         pCDIO->scsi_read_flag = 0;
         if (rc != DRIVER_OP_SUCCESS)
         {
@@ -205,9 +206,7 @@ void readCDInfo(APP_CDIO *pCDIO)
     int attempts = 0;   // 尝试读取CD Text次数
     while (1)
     {
-        pthread_mutex_lock(&pCDIO->lock);
-        CdIo *cd = pCDIO->cdio;
-        pthread_mutex_unlock(&pCDIO->lock);
+        CdIo *cd = app_cdio_acquire_cdio();
         if (!cd)
         {
             pthread_mutex_lock(&pCDIO->lock);
@@ -221,7 +220,6 @@ void readCDInfo(APP_CDIO *pCDIO)
         }
 
         // 读取CD音轨总数
-        app_cdio_acquire_cdio();
         pCDIO->now_tracks = cdio_get_first_track_num(cd);
         pCDIO->total_tracks = cdio_get_num_tracks(cd);
         app_cdio_release_cdio();
@@ -245,10 +243,9 @@ void readCDInfo(APP_CDIO *pCDIO)
     printf("  #:  LSN\n");
     pCDIO->cdda_ready_flag = 1; // 获取到了CD音轨信息
     int j, i = pCDIO->now_tracks;
-    CdIo *cd_for_lsns = pCDIO->cdio;
     pthread_mutex_unlock(&pCDIO->lock);
 
-    if (cd_for_lsns) app_cdio_acquire_cdio();
+    CdIo *cd_for_lsns = app_cdio_acquire_cdio();
 
     for (j = 0; j < pCDIO->total_tracks; i++, j++)
     {
@@ -267,9 +264,9 @@ void readCDInfo(APP_CDIO *pCDIO)
     if (cd_for_lsns) app_cdio_release_cdio();
 
     // read_text:
-    app_cdio_acquire_cdio();
     pCDIO->album_ready_flag = 0;
-    pCDIO->cdtext = cdio_get_cdtext(pCDIO->cdio);
+    CdIo *cdtext_cd = app_cdio_acquire_cdio();
+    pCDIO->cdtext = cdtext_cd ? cdio_get_cdtext(cdtext_cd) : NULL;
     if (pCDIO->cdtext)
     {
         // 似乎没用，buildroot编译libcdio时只支持英文解码
@@ -332,7 +329,6 @@ void readCDInfo(APP_CDIO *pCDIO)
         }
         // 都拷贝完毕了，可以释放cdtext
         cdtext_destroy(pCDIO->cdtext);
-        app_cdio_release_cdio();
 
         if (pCDIO->album_info)
         {
@@ -367,6 +363,7 @@ void readCDInfo(APP_CDIO *pCDIO)
         }
         printf("No CD text information available\n");
     }
+    if (cdtext_cd) app_cdio_release_cdio();
 
     // 进入播放循环
     while (1)
@@ -513,31 +510,51 @@ void *cd_player_thread_entry(void *arg)
             }
             pthread_mutex_unlock(&app_cdio.lock);
 
-            // 可以安全弹出光碟了
-            printf("Ejecting media (cd=%p)\n", (void *)cd);
-            cdio_eject_media_drive(OPTICAL_DEVICE);
-            printf("Eject complete\n");
-
+            CdIo *cdio_to_destroy = NULL;
             pthread_mutex_lock(&app_cdio.lock);
             app_cdio.album_ready_flag = 0;
             app_cdio.ejct = 0;
             app_cdio.eject_in_progress = 0;
-            // todo: 如何正确释放cdio资源？添加会导致Segmentation fault错误
-            // if (app_cdio.cdio != NULL)
-            //     cdio_destroy(app_cdio.cdio);
+            cdio_to_destroy = app_cdio.cdio;
             app_cdio.cdio = NULL;
             pthread_mutex_unlock(&app_cdio.lock);
+
+            if (cdio_to_destroy)
+            {
+                pthread_mutex_lock(&app_cdio.lock);
+                while (app_cdio.cdio_refcount > 0)
+                {
+                    pthread_cond_wait(&app_cdio.cond, &app_cdio.lock);
+                }
+                pthread_mutex_unlock(&app_cdio.lock);
+                // cdio_destroy(cdio_to_destroy);
+            }
+
+            // 可以安全弹出光碟了
+            printf("Ejecting media (cd=%p)\n", (void *)cd);
+            cdio_eject_media_drive(OPTICAL_DEVICE);
+            printf("Eject complete\n");
         }
         else if(app_cdio.disc_mode == CDIO_DISC_MODE_CD_DA)
         {   // 如果是CD—DA光碟，走到这一部也没有弹出请求，那么说明音轨读取错误，关闭cdio从头再来一遍
             cdio_close_tray(OPTICAL_DEVICE, NULL);
+            CdIo *cdio_to_destroy = NULL;
             pthread_mutex_lock(&app_cdio.lock);
-            // todo: 如何正确释放cdio资源？添加会导致Segmentation fault错误
-            // if (app_cdio.cdio != NULL)
-            //     cdio_destroy(app_cdio.cdio);
             app_cdio.album_ready_flag = 0;
+            cdio_to_destroy = app_cdio.cdio;
             app_cdio.cdio = NULL;
             pthread_mutex_unlock(&app_cdio.lock);
+
+            if (cdio_to_destroy)
+            {
+                pthread_mutex_lock(&app_cdio.lock);
+                while (app_cdio.cdio_refcount > 0)
+                {
+                    pthread_cond_wait(&app_cdio.cond, &app_cdio.lock);
+                }
+                pthread_mutex_unlock(&app_cdio.lock);
+                // cdio_destroy(cdio_to_destroy);
+            }
         }
 
         sleep(2);
@@ -617,11 +634,16 @@ void app_cdio_set_eject(void)
     pthread_mutex_unlock(&app_cdio.lock);
 }
 
-void app_cdio_acquire_cdio(void)
+CdIo *app_cdio_acquire_cdio(void)
 {
     pthread_mutex_lock(&app_cdio.lock);
-    app_cdio.cdio_refcount++;
+    CdIo *cd = app_cdio.cdio;
+    if (cd && !app_cdio.eject_in_progress)
+        app_cdio.cdio_refcount++;
+    else
+        cd = NULL;
     pthread_mutex_unlock(&app_cdio.lock);
+    return cd;
 }
 
 void app_cdio_release_cdio(void)
