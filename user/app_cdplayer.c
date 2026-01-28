@@ -471,6 +471,7 @@ void *cd_player_thread_entry(void *arg)
             readCDInfo(&app_cdio); // 这是CD-DA光碟，播放CD音轨
         }
         else if (app_cdio.disc_mode == CDIO_DISC_MODE_CD_DATA ||
+                app_cdio.disc_mode == CDIO_DISC_MODE_CD_XA ||
                 app_cdio.disc_mode == CDIO_DISC_MODE_DVD_R ||
                 app_cdio.disc_mode == CDIO_DISC_MODE_DVD_RW ||
                 app_cdio.disc_mode == CDIO_DISC_MODE_DVD_ROM)
