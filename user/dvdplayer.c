@@ -5,9 +5,12 @@
 #include <string.h>
 #include <strings.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <linux/cdrom.h>
 #include <unistd.h>
 #include <time.h>
 #include <alsa/asoundlib.h>
@@ -89,8 +92,29 @@ int play_wav(const char *file_path, APP_CDIO *pCDIO);
 int play_mp3(const char *file_path, APP_CDIO *pCDIO);
 int reconfigure_alsa_rate(snd_pcm_t *pcm_handle, unsigned int sample_rate, uint8_t format);
 
+int cdrom_set_speed(const char *dev_path, int speed_x)
+{
+    if (!dev_path) return -EINVAL;
+    if (speed_x < 0) return -EINVAL;
+
+    // O_NONBLOCK: avoid blocking on some drives when no media / during spin-up
+    int fd = open(dev_path, O_RDONLY | O_NONBLOCK);
+    if (fd < 0) return -errno;
+
+    // CDROM_SELECT_SPEED: speed in X; 0 means "auto"
+    int rc = ioctl(fd, CDROM_SELECT_SPEED, speed_x);
+    int saved_errno = errno;
+
+    close(fd);
+
+    if (rc < 0) return -saved_errno;
+    return 0;
+}
+
 int play_dvd(const char *cd_dev, APP_CDIO *pCDIO)
 {
+    cdrom_set_speed(cd_dev, 4);
+    
     if (mount_dvd(cd_dev) != 0)
     {
         fprintf(stderr, "Failed to mount DVD from %s.\n", cd_dev);
