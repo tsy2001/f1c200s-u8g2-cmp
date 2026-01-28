@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 #include <strings.h>
 #include <dirent.h>
@@ -37,6 +39,46 @@ typedef enum {
 #define ALSA_PERIOD_FRAMES 2048
 #define ALSA_BUFFER_FRAMES 8192
 
+static inline void to_stereo_s16(const int16_t *in, uint64_t frames, unsigned int channels, int16_t *out)
+{
+    if (channels <= 1)
+    {
+        for (uint64_t i = 0; i < frames; i++)
+        {
+            int16_t s = in[i];
+            out[i * 2] = s;
+            out[i * 2 + 1] = s;
+        }
+        return;
+    }
+
+    for (uint64_t i = 0; i < frames; i++)
+    {
+        out[i * 2] = in[i * channels];
+        out[i * 2 + 1] = in[i * channels + 1];
+    }
+}
+
+static inline void to_stereo_s32(const int32_t *in, uint64_t frames, unsigned int channels, int32_t *out)
+{
+    if (channels <= 1)
+    {
+        for (uint64_t i = 0; i < frames; i++)
+        {
+            int32_t s = in[i];
+            out[i * 2] = s;
+            out[i * 2 + 1] = s;
+        }
+        return;
+    }
+
+    for (uint64_t i = 0; i < frames; i++)
+    {
+        out[i * 2] = in[i * channels];
+        out[i * 2 + 1] = in[i * channels + 1];
+    }
+}
+
 // 函数声明
 int mount_dvd(const char *dev);
 void scan_and_play_audio(const char *path, APP_CDIO *pCDIO);
@@ -45,7 +87,7 @@ audio_format_t detect_audio_format(const char *file_path);
 int play_flac(const char *file_path, APP_CDIO *pCDIO);
 int play_wav(const char *file_path, APP_CDIO *pCDIO);
 int play_mp3(const char *file_path, APP_CDIO *pCDIO);
-int reconfigure_alsa_rate(snd_pcm_t *pcm_handle, unsigned int sample_rate);
+int reconfigure_alsa_rate(snd_pcm_t *pcm_handle, unsigned int sample_rate, uint8_t format);
 
 int play_dvd(const char *cd_dev, APP_CDIO *pCDIO)
 {
@@ -63,11 +105,30 @@ int play_dvd(const char *cd_dev, APP_CDIO *pCDIO)
 }
 
 // 配置ALSA采样率
-int reconfigure_alsa_rate(snd_pcm_t *pcm_handle, unsigned int sample_rate)
+int reconfigure_alsa_rate(snd_pcm_t *pcm_handle, unsigned int sample_rate, uint8_t format)
 {
     int err;
 
     printf("=== Starting ALSA reconfiguration to %u Hz ===\n", sample_rate);
+
+    snd_pcm_format_t fmt;
+    switch (format) {
+        case 8:
+            fmt = SND_PCM_FORMAT_S8;
+            break;
+        case 16:
+            fmt = SND_PCM_FORMAT_S16_LE;
+            break;
+        case 24:
+            fmt = SND_PCM_FORMAT_S24_LE;
+            break;
+        case 32:
+            fmt = SND_PCM_FORMAT_S32_LE;
+            break;
+        default:
+            fmt = SND_PCM_FORMAT_S16_LE;
+            break;
+    }
 
     snd_pcm_state_t state = snd_pcm_state(pcm_handle);
     printf("Current PCM state: %d\n", state);
@@ -92,7 +153,7 @@ int reconfigure_alsa_rate(snd_pcm_t *pcm_handle, unsigned int sample_rate)
     printf("Recovering PCM...\n");
     snd_pcm_recover(pcm_handle, -ESTRPIPE, 1);
 
-    snd_pcm_hw_params_t *params = malloc(snd_pcm_hw_params_sizeof());
+    /*snd_pcm_hw_params_t *params = malloc(snd_pcm_hw_params_sizeof());
     if (!params) {
         fprintf(stderr, "malloc failed for ALSA params\n");
         return -1;
@@ -155,32 +216,32 @@ int reconfigure_alsa_rate(snd_pcm_t *pcm_handle, unsigned int sample_rate)
         fprintf(stderr, "snd_pcm_hw_params failed: %s\n", snd_strerror(err));
         free(params);
         return -1;
-    }
+    }*/
 
     // 这是另一种配置方式，如果codec不支持采样率可以让alsalib自己转换采样率
-    // printf("Applying Alsa parameters...\n");
-    // err = snd_pcm_set_params(pcm_handle,
-    //                    SND_PCM_FORMAT_S16_LE,
-    //                    SND_PCM_ACCESS_RW_INTERLEAVED,
-    //                    2,
-    //                    sample_rate, 
-    //                    1,
-    //                    500000);
-    // if (err < 0) {
-    //     fprintf(stderr, "snd_pcm_set_params failed: %s\n", snd_strerror(err));
-    //     return -1;
-    // }
+    printf("Applying Alsa parameters...\n");
+    err = snd_pcm_set_params(pcm_handle,
+                       fmt,
+                       SND_PCM_ACCESS_RW_INTERLEAVED,
+                       2,
+                       sample_rate, 
+                       1,
+                       400000);
+    if (err < 0) {
+        fprintf(stderr, "snd_pcm_set_params failed: %s\n", snd_strerror(err));
+        return -1;
+    }
 
     printf("Preparing PCM...\n");
     err = snd_pcm_prepare(pcm_handle);
     if (err < 0) {
         fprintf(stderr, "snd_pcm_prepare failed: %s\n", snd_strerror(err));
-        free(params);
+        // free(params);
         return -1;
     }
 
     printf("=== ALSA reconfiguration to %u Hz complete ===\n", sample_rate);
-    free(params);
+    // free(params);
     return 0;
 }
 
@@ -211,6 +272,32 @@ int write_audio_to_alsa(snd_pcm_t *pcm_handle, int16_t *data, uint64_t frames,
     return frames_written;
 }
 
+int write_audio_to_alsa_s32(snd_pcm_t *pcm_handle, int32_t *data, uint64_t frames,
+                            unsigned int channels __attribute__((unused)), APP_CDIO *pCDIO)
+{
+    if (frames == 0)
+        return 0;
+
+    int frames_written = snd_pcm_writei(pcm_handle, data, (int)frames);
+    if (frames_written < 0) {
+        int err = snd_pcm_recover(pcm_handle, frames_written, 0);
+        if (err < 0) {
+            fprintf(stderr, "ALSA recover failed: %s\n", snd_strerror(err));
+            snd_pcm_drain(pcm_handle);
+            snd_pcm_prepare(pcm_handle);
+        }
+        return frames_written;
+    }
+
+    if (frames_written > 0) {
+        pthread_mutex_lock(&pCDIO->lock);
+        pCDIO->now_lsn += frames_written;
+        pthread_mutex_unlock(&pCDIO->lock);
+    }
+
+    return frames_written;
+}
+
 int mount_dvd(const char *dev)
 {
     if (access(MOUNT_POINT, F_OK) != 0)
@@ -227,7 +314,7 @@ int mount_dvd(const char *dev)
     {
         if (mount(dev, MOUNT_POINT, fstypes[i], MS_RDONLY, NULL) == 0)
             return 0;
-        perror("Failed to mount DVD by: %s", fstypes[i]);
+        printf("Failed to mount DVD by: %s\n", fstypes[i]);
     }
 
     return -1;
@@ -422,7 +509,8 @@ int play_wav(const char *file_path, APP_CDIO *pCDIO)
            wav.channels, wav.sampleRate, wav.bitsPerSample, wav.totalPCMFrameCount);
 
     // 配置ALSA采样率
-    if (reconfigure_alsa_rate(pCDIO->pcm_handle, wav.sampleRate) < 0) {
+    uint8_t out_bits = (wav.bitsPerSample > 16) ? 32 : 16;
+    if (reconfigure_alsa_rate(pCDIO->pcm_handle, wav.sampleRate, out_bits) < 0) {
         fprintf(stderr, "Failed to reconfigure ALSA for WAV\n");
         drwav_uninit(&wav);
         return AUDIO_ERROR;
@@ -436,13 +524,36 @@ int play_wav(const char *file_path, APP_CDIO *pCDIO)
 
     // 分配缓冲区
     size_t buffer_frames = 16384;
-    int16_t *pSampleData = (int16_t *)malloc(buffer_frames * wav.channels * sizeof(int16_t));
-    if (!pSampleData)
+    bool use_s32 = wav.bitsPerSample > 16;
+    void *sample_buf = NULL;
+    void *stereo_buf = NULL;
+    if (use_s32)
+        sample_buf = malloc(buffer_frames * wav.channels * sizeof(int32_t));
+    else
+        sample_buf = malloc(buffer_frames * wav.channels * sizeof(int16_t));
+    if (!sample_buf)
     {
         perror("malloc failed for WAV samples");
         drwav_uninit(&wav);
         return AUDIO_ERROR;
     }
+    if (wav.channels != 2)
+    {
+        if (use_s32)
+            stereo_buf = malloc(buffer_frames * 2 * sizeof(int32_t));
+        else
+            stereo_buf = malloc(buffer_frames * 2 * sizeof(int16_t));
+        if (!stereo_buf)
+        {
+            perror("malloc failed for WAV stereo buffer");
+            free(sample_buf);
+            drwav_uninit(&wav);
+            return AUDIO_ERROR;
+        }
+    }
+
+    int16_t *pSampleData = (int16_t *)sample_buf;
+    int32_t *pSampleData32 = (int32_t *)sample_buf;
 
     uint64_t frames_read = 0;
 
@@ -478,7 +589,8 @@ int play_wav(const char *file_path, APP_CDIO *pCDIO)
                 snd_pcm_prepare(pCDIO->pcm_handle);
             }
             
-            free(pSampleData);
+            free(stereo_buf);
+            free(sample_buf);
             drwav_uninit(&wav);
             
             if (next)
@@ -503,7 +615,15 @@ int play_wav(const char *file_path, APP_CDIO *pCDIO)
         // dr_lib解码
         uint64_t samples_to_read = (wav.totalPCMFrameCount - frames_read > buffer_frames) ? 
                                    buffer_frames : (wav.totalPCMFrameCount - frames_read);
-        uint64_t frames = drwav_read_pcm_frames_s16(&wav, samples_to_read, pSampleData);
+        uint64_t frames = 0;
+        if (use_s32)
+        {
+            frames = drwav_read_pcm_frames_s32(&wav, samples_to_read, pSampleData32);
+        }
+        else
+        {
+            frames = drwav_read_pcm_frames_s16(&wav, samples_to_read, pSampleData);
+        }
 
         if (frames == 0)
             break;
@@ -514,14 +634,49 @@ int play_wav(const char *file_path, APP_CDIO *pCDIO)
         vol_snapshot = pCDIO->volume;
         pthread_mutex_unlock(&pCDIO->lock);
 
-        for (uint64_t i = 0; i < frames * wav.channels; i++)
+        if (use_s32)
         {
-            int32_t scaled = (int32_t)(pSampleData[i] * vol_snapshot);
-            pSampleData[i] = (int16_t)(scaled > INT16_MAX ? INT16_MAX : (scaled < INT16_MIN ? INT16_MIN : scaled));
+            for (uint64_t i = 0; i < frames * wav.channels; i++)
+            {
+                int64_t scaled = (int64_t)(pSampleData32[i] * vol_snapshot);
+                if (scaled > INT32_MAX)
+                    scaled = INT32_MAX;
+                else if (scaled < INT32_MIN)
+                    scaled = INT32_MIN;
+                pSampleData32[i] = (int32_t)scaled;
+            }
+        }
+        else
+        {
+            for (uint64_t i = 0; i < frames * wav.channels; i++)
+            {
+                int32_t scaled = (int32_t)(pSampleData[i] * vol_snapshot);
+                pSampleData[i] = (int16_t)(scaled > INT16_MAX ? INT16_MAX : (scaled < INT16_MIN ? INT16_MIN : scaled));
+            }
         }
 
         // 写入ALSA
-        int frames_written = write_audio_to_alsa(pCDIO->pcm_handle, pSampleData, frames, wav.channels, pCDIO);
+        int frames_written = 0;
+        if (use_s32)
+        {
+            int32_t *out_buf = pSampleData32;
+            if (wav.channels != 2)
+            {
+                to_stereo_s32(pSampleData32, frames, wav.channels, (int32_t *)stereo_buf);
+                out_buf = (int32_t *)stereo_buf;
+            }
+            frames_written = write_audio_to_alsa_s32(pCDIO->pcm_handle, out_buf, frames, 2, pCDIO);
+        }
+        else
+        {
+            int16_t *out_buf = pSampleData;
+            if (wav.channels != 2)
+            {
+                to_stereo_s16(pSampleData, frames, wav.channels, (int16_t *)stereo_buf);
+                out_buf = (int16_t *)stereo_buf;
+            }
+            frames_written = write_audio_to_alsa(pCDIO->pcm_handle, out_buf, frames, 2, pCDIO);
+        }
         if (frames_written < 0) {
             fprintf(stderr, "ALSA write error: %d\n", frames_written);
             // todo：出错了也没办法
@@ -530,7 +685,8 @@ int play_wav(const char *file_path, APP_CDIO *pCDIO)
         }
     }
 
-    free(pSampleData);
+    free(stereo_buf);
+    free(sample_buf);
     drwav_uninit(&wav);
     return AUDIO_OK;
 }
@@ -547,14 +703,8 @@ int play_flac(const char *file_path, APP_CDIO *pCDIO)
     printf("FLAC: channels=%u, sample_rate=%u, bit_per_sample=%u, total_frames=%llu\n",
            pFlac->channels, pFlac->sampleRate, pFlac->bitsPerSample, pFlac->totalPCMFrameCount);
 
-    if (pFlac->bitsPerSample != 16)
-    {
-        fprintf(stderr, "Unsupported FLAC bit depth: %u\n", pFlac->bitsPerSample);
-        drflac_close(pFlac);
-        return AUDIO_NEXT;
-    }
-
-    if (reconfigure_alsa_rate(pCDIO->pcm_handle, pFlac->sampleRate) < 0) {
+    uint8_t out_bits = (pFlac->bitsPerSample > 16) ? 32 : 16;
+    if (reconfigure_alsa_rate(pCDIO->pcm_handle, pFlac->sampleRate, out_bits) < 0) {
         fprintf(stderr, "Failed to reconfigure ALSA for FLAC\n");
         drflac_close(pFlac);
         return AUDIO_ERROR;
@@ -566,13 +716,36 @@ int play_flac(const char *file_path, APP_CDIO *pCDIO)
     pthread_mutex_unlock(&pCDIO->lock);
 
     size_t buffer_frames = 16384;
-    drflac_int16 *pSampleData = (drflac_int16 *)malloc(pFlac->channels * buffer_frames * sizeof(drflac_int16));
-    if (!pSampleData)
+    bool use_s32 = pFlac->bitsPerSample > 16;
+    void *sample_buf = NULL;
+    void *stereo_buf = NULL;
+    if (use_s32)
+        sample_buf = malloc(pFlac->channels * buffer_frames * sizeof(drflac_int32));
+    else
+        sample_buf = malloc(pFlac->channels * buffer_frames * sizeof(drflac_int16));
+    if (!sample_buf)
     {
         perror("malloc failed for FLAC samples");
         drflac_close(pFlac);
         return AUDIO_ERROR;
     }
+    if (pFlac->channels != 2)
+    {
+        if (use_s32)
+            stereo_buf = malloc(buffer_frames * 2 * sizeof(drflac_int32));
+        else
+            stereo_buf = malloc(buffer_frames * 2 * sizeof(drflac_int16));
+        if (!stereo_buf)
+        {
+            perror("malloc failed for FLAC stereo buffer");
+            free(sample_buf);
+            drflac_close(pFlac);
+            return AUDIO_ERROR;
+        }
+    }
+
+    drflac_int16 *pSampleData = (drflac_int16 *)sample_buf;
+    drflac_int32 *pSampleData32 = (drflac_int32 *)sample_buf;
 
     uint64_t frames_read = 0;
     int last_rc = AUDIO_OK;
@@ -610,7 +783,15 @@ int play_flac(const char *file_path, APP_CDIO *pCDIO)
 
         uint64_t samples_to_read = (pFlac->totalPCMFrameCount - frames_read > buffer_frames) ? 
                                    buffer_frames : (pFlac->totalPCMFrameCount - frames_read);
-        uint64_t frames = drflac_read_pcm_frames_s16(pFlac, samples_to_read, pSampleData);
+        uint64_t frames = 0;
+        if (use_s32)
+        {
+            frames = drflac_read_pcm_frames_s32(pFlac, samples_to_read, pSampleData32);
+        }
+        else
+        {
+            frames = drflac_read_pcm_frames_s16(pFlac, samples_to_read, pSampleData);
+        }
 
         if (frames == 0)
             break;
@@ -620,13 +801,48 @@ int play_flac(const char *file_path, APP_CDIO *pCDIO)
         vol_snapshot = pCDIO->volume;
         pthread_mutex_unlock(&pCDIO->lock);
 
-        for (uint64_t i = 0; i < frames * pFlac->channels; i++)
+        if (use_s32)
         {
-            int32_t scaled = (int32_t)(pSampleData[i] * vol_snapshot);
-            pSampleData[i] = (int16_t)(scaled > INT16_MAX ? INT16_MAX : (scaled < INT16_MIN ? INT16_MIN : scaled));
+            for (uint64_t i = 0; i < frames * pFlac->channels; i++)
+            {
+                int64_t scaled = (int64_t)(pSampleData32[i] * vol_snapshot);
+                if (scaled > INT32_MAX)
+                    scaled = INT32_MAX;
+                else if (scaled < INT32_MIN)
+                    scaled = INT32_MIN;
+                pSampleData32[i] = (int32_t)scaled;
+            }
+        }
+        else
+        {
+            for (uint64_t i = 0; i < frames * pFlac->channels; i++)
+            {
+                int32_t scaled = (int32_t)(pSampleData[i] * vol_snapshot);
+                pSampleData[i] = (int16_t)(scaled > INT16_MAX ? INT16_MAX : (scaled < INT16_MIN ? INT16_MIN : scaled));
+            }
         }
 
-        int frames_written = write_audio_to_alsa(pCDIO->pcm_handle, pSampleData, frames, pFlac->channels, pCDIO);
+        int frames_written = 0;
+        if (use_s32)
+        {
+            int32_t *out_buf = pSampleData32;
+            if (pFlac->channels != 2)
+            {
+                to_stereo_s32(pSampleData32, frames, pFlac->channels, (int32_t *)stereo_buf);
+                out_buf = (int32_t *)stereo_buf;
+            }
+            frames_written = write_audio_to_alsa_s32(pCDIO->pcm_handle, out_buf, frames, 2, pCDIO);
+        }
+        else
+        {
+            int16_t *out_buf = pSampleData;
+            if (pFlac->channels != 2)
+            {
+                to_stereo_s16(pSampleData, frames, pFlac->channels, (int16_t *)stereo_buf);
+                out_buf = (int16_t *)stereo_buf;
+            }
+            frames_written = write_audio_to_alsa(pCDIO->pcm_handle, out_buf, frames, 2, pCDIO);
+        }
         if (frames_written < 0) {
             fprintf(stderr, "ALSA write error: %d\n", frames_written);
             // todo：flac 和 mp3出错概率较高
@@ -635,7 +851,8 @@ int play_flac(const char *file_path, APP_CDIO *pCDIO)
         }
     }
 
-    free(pSampleData);
+    free(stereo_buf);
+    free(sample_buf);
     drflac_close(pFlac);
     
     int st = snd_pcm_state(pCDIO->pcm_handle);
@@ -661,7 +878,7 @@ int play_mp3(const char *file_path, APP_CDIO *pCDIO)
 
     printf("MP3: channels=%u, sample_rate=%u\n", mp3.channels, mp3.sampleRate);
 
-    if (reconfigure_alsa_rate(pCDIO->pcm_handle, mp3.sampleRate) < 0) {
+    if (reconfigure_alsa_rate(pCDIO->pcm_handle, mp3.sampleRate, 16) < 0) {
         fprintf(stderr, "Failed to reconfigure ALSA for MP3\n");
         drmp3_uninit(&mp3);
         return AUDIO_ERROR;
@@ -673,12 +890,24 @@ int play_mp3(const char *file_path, APP_CDIO *pCDIO)
     pthread_mutex_unlock(&pCDIO->lock);
 
     size_t buffer_frames = 8192;
+    int16_t *stereo_buf = NULL;
     int16_t *pSampleData = (int16_t *)malloc(mp3.channels * buffer_frames * sizeof(int16_t));
     if (!pSampleData)
     {
         perror("malloc failed for MP3 samples");
         drmp3_uninit(&mp3);
         return AUDIO_ERROR;
+    }
+    if (mp3.channels != 2)
+    {
+        stereo_buf = (int16_t *)malloc(buffer_frames * 2 * sizeof(int16_t));
+        if (!stereo_buf)
+        {
+            perror("malloc failed for MP3 stereo buffer");
+            free(pSampleData);
+            drmp3_uninit(&mp3);
+            return AUDIO_ERROR;
+        }
     }
 
     int last_rc = AUDIO_OK;
@@ -733,7 +962,14 @@ int play_mp3(const char *file_path, APP_CDIO *pCDIO)
             pSampleData[i] = (int16_t)(scaled > INT16_MAX ? INT16_MAX : (scaled < INT16_MIN ? INT16_MIN : scaled));
         }
 
-        int frames_written = write_audio_to_alsa(pCDIO->pcm_handle, pSampleData, frames, mp3.channels, pCDIO);
+        int16_t *out_buf = pSampleData;
+        if (mp3.channels != 2)
+        {
+            to_stereo_s16(pSampleData, frames, mp3.channels, stereo_buf);
+            out_buf = stereo_buf;
+        }
+
+        int frames_written = write_audio_to_alsa(pCDIO->pcm_handle, out_buf, frames, 2, pCDIO);
         if (frames_written < 0) {
             fprintf(stderr, "ALSA write error: %d\n", frames_written);
         } else {
@@ -741,6 +977,7 @@ int play_mp3(const char *file_path, APP_CDIO *pCDIO)
         }
     }
 
+    free(stereo_buf);
     free(pSampleData);
     drmp3_uninit(&mp3);
     

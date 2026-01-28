@@ -1,6 +1,6 @@
 ## 编译
 1、修改./user/Makefile  
-  SYSROOT=修改成<你的buildroot绝对路径>/output/host/arm-buildroot-linux-musleabi/sysroot  
+  SYSROOT=修改成<你的buildroot绝对路径>/output/host/arm-buildroot-linux-uclibcgnueabi/sysroot  
 2、make -j4  
   输出可执行文件在./output/bin/u8g2_hw_i2c_dvd  
 
@@ -8,6 +8,7 @@
 3、播放FLAC、WAV音频文件不支持24Bit解码，仅支持16Bit  
 原因：内核驱动程序Simple Audio Card不支持  
 改进思路：应用程序转换一下格式。当前版本遇到24bit的音频文件直接跳过。  
+26.1.28以解决  
 
 2、不定时内核BUG警告  
 现象：无，或者声音突然卡一下然后恢复，软件仍可继续运行  

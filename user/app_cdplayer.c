@@ -14,7 +14,7 @@
 // 光驱设备
 #define OPTICAL_DEVICE "/dev/sr0"
 // 声卡设备
-#define PCM_DEVICE "hw:1,0"
+#define PCM_DEVICE "default"
 
 led_t *mute_handle = NULL;
 pthread_t cd_thread;
@@ -23,7 +23,7 @@ APP_CDIO app_cdio;
 
 // 从dvdplayer.c引用的函数声明
 int play_dvd(const char *cd_dev, APP_CDIO *pCDIO);
-int reconfigure_alsa_rate(snd_pcm_t *pcm_handle, unsigned int sample_rate);
+int reconfigure_alsa_rate(snd_pcm_t *pcm_handle, unsigned int sample_rate, uint8_t format);
 
 void apply_volume(void *buffer, size_t bytes, float *volume)
 {
@@ -202,7 +202,7 @@ uint8_t playCDTrack(APP_CDIO *pCDIO, track_t track)
 void readCDInfo(APP_CDIO *pCDIO)
 {
     pCDIO->cdtext = NULL;
-    reconfigure_alsa_rate(app_cdio.pcm_handle, 44100);
+    reconfigure_alsa_rate(app_cdio.pcm_handle, 44100, 16);
     int attempts = 0;   // 尝试读取CD Text次数
     while (1)
     {
