@@ -34,8 +34,8 @@ typedef struct {
 
 
 #define DEBOUNCE_TIME       10      // 消抖时间(ms)
-#define CLICK_TIME          200     // 单击最大时间(ms)
-#define DOUBLE_CLICK_TIME   150     // 双击间隔时间(ms)
+#define CLICK_TIME          240     // 单击最大时间(ms)
+#define DOUBLE_CLICK_TIME   180     // 双击间隔时间(ms)
 #define LONG_PRESS_TIME     1000    // 长按时间(ms)
 
 #define IR_DEBOUNCE_MS      200     // IR消抖时间(ms)

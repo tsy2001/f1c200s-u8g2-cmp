@@ -257,6 +257,7 @@ void *button_handl_entry(void *arg)
             led_write(led_handle, 1);
             usleep(200000);
             led_write(led_handle, 0);
+            led_set_trigger(led_handle, "rc-feedback");
             //beep_play_button(0);
         }
 
@@ -393,9 +394,9 @@ void *button_ir_entry(void *arg)
             if (n != sizeof(ev))
                 continue;
 
-            if (ev.type == EV_MSC && ev.value > 0)
+            if (ev.type == EV_KEY && ev.code > 0 && ev.value == 1)
             {
-                unsigned int code = ev.value;
+                unsigned int code = ev.code;
                 if (code == last_code && (now - last_time) < IR_DEBOUNCE_MS)
                 {
                     continue; // 类似防抖效果，防止多次触发
@@ -404,78 +405,62 @@ void *button_ir_entry(void *arg)
                 last_time = now;
                 switch (code)
                 {
-                case 0x40: // pause
-                case 0x404056:
+                case KEY_PAUSE: // pause
                     app_cdio_toggle_stop();
                     printf("IR: pause\n");
                     break;
-                case 0x47: // eject
-                case 0x40401f:
+                case KEY_EJECTCD: // eject
                     app_cdio_set_eject();
                     printf("IR: eject\n");
                     break;
-                case 0x44: // prev
-                case 0x404055:
+                case KEY_PREVIOUS: // prev
                     app_cdio_set_prev();
                     printf("IR: prev\n");
                     break;
-                case 0x43: // next
-                case 0x404057:
+                case KEY_NEXT: // next
                     app_cdio_set_next();
                     printf("IR: next\n");
                     break;
-                case 0x07: // vol-
-                case 0x404011:
+                case KEY_VOLUMEDOWN: // vol-
                     app_cdio_adjust_volume(-0.05f);
                     printf("IR: vol-\n");
                     break;
-                case 0x09: // vol+
-                case 0x404010:
+                case KEY_VOLUMEUP: // vol+
                     app_cdio_adjust_volume(0.05f);
                     printf("IR: vol+\n");
                     break;
-                case 0x16: // 1
-                case 0x19: // 2
-                case 0x0D: // 3
-                case 0x0C: // 4
-                case 0x18: // 5
-                case 0x5E: // 6
-                case 0x08: // 7
-                case 0x1C: // 8
-                case 0x5A: // 9
-                case 0x42: // 0
-                case 0x404001: // 1
-                case 0x404002: // 2
-                case 0x404003: // 3
-                case 0x404004: // 4
-                case 0x404005: // 5
-                case 0x404006: // 6
-                case 0x404007: // 7
-                case 0x404008: // 8
-                case 0x404009: // 9
-                case 0x404000: // 0
+                case KEY_NUMERIC_0: // 1
+                case KEY_NUMERIC_1: // 2
+                case KEY_NUMERIC_2: // 3
+                case KEY_NUMERIC_3: // 4
+                case KEY_NUMERIC_4: // 5
+                case KEY_NUMERIC_5: // 6
+                case KEY_NUMERIC_6: // 7
+                case KEY_NUMERIC_7: // 8
+                case KEY_NUMERIC_8: // 9
+                case KEY_NUMERIC_9: // 0
                 {
                     int digit = -1;
-                    if (code == 0x16 || code == 0x404001)
-                        digit = 1;
-                    else if (code == 0x19 || code == 0x404002)
-                        digit = 2;
-                    else if (code == 0x0D || code == 0x404003)
-                        digit = 3;
-                    else if (code == 0x0C || code == 0x404004)
-                        digit = 4;
-                    else if (code == 0x18 || code == 0x404005)
-                        digit = 5;
-                    else if (code == 0x5E || code == 0x404006)
-                        digit = 6;
-                    else if (code == 0x08 || code == 0x404007)
-                        digit = 7;
-                    else if (code == 0x1C || code == 0x404008)
-                        digit = 8;
-                    else if (code == 0x5A || code == 0x404009)
-                        digit = 9;
-                    else if (code == 0x42 || code == 0x404000)
+                    if (code == KEY_NUMERIC_0)
                         digit = 0;
+                    else if (code == KEY_NUMERIC_1)
+                        digit = 1;
+                    else if (code == KEY_NUMERIC_2)
+                        digit = 2;
+                    else if (code == KEY_NUMERIC_3)
+                        digit = 3;
+                    else if (code == KEY_NUMERIC_4)
+                        digit = 4;
+                    else if (code == KEY_NUMERIC_5)
+                        digit = 5;
+                    else if (code == KEY_NUMERIC_6)
+                        digit = 6;
+                    else if (code == KEY_NUMERIC_7)
+                        digit = 7;
+                    else if (code == KEY_NUMERIC_8)
+                        digit = 8;
+                    else if (code == KEY_NUMERIC_9)
+                        digit = 9;
 
                     if (digit >= 0)
                     {
@@ -489,8 +474,7 @@ void *button_ir_entry(void *arg)
                     }
                 }
                 break;
-                case 0x4A: // confirm
-                case 0x404041:
+                case KEY_ENTER: // confirm
                     if (dlen > 0)
                     {
                         uint16_t track_num = (uint16_t)atoi(digits);
