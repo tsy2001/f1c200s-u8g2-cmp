@@ -1060,6 +1060,12 @@ int play_mp3(const char *file_path, APP_CDIO *pCDIO)
 int play_audio(const char *file_path, APP_CDIO *pCDIO)
 {
     audio_format_t fmt = detect_audio_format(file_path);
+    const char *name = strrchr(file_path, '/');
+    name = name ? name + 1 : file_path;
+    pthread_mutex_lock(&pCDIO->lock);
+    strncpy(pCDIO->now_title, name, ONE_ALBUM_LENGTH - 1);
+    pCDIO->now_title[ONE_ALBUM_LENGTH - 1] = '\0';
+    pthread_mutex_unlock(&pCDIO->lock);
 
     printf("Playing: %s (format=%d)\n", file_path, fmt);
 

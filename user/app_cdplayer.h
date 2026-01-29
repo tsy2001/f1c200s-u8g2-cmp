@@ -27,6 +27,7 @@ typedef struct {
 
     char **album_info;
     char **album_artist;
+    char now_title[ONE_ALBUM_LENGTH];
 
     uint8_t album_ready_flag;
     uint8_t cdda_ready_flag;

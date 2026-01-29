@@ -5,6 +5,8 @@
 #include <pthread.h>
 #include <linux/input.h>
 #include <sys/times.h>
+#include <sys/stat.h>
+#include <stdio.h>
 #include <string.h>
 #include <errno.h>
 #include <u8g2port.h>
@@ -15,6 +17,8 @@
 #define OPTICAL_DEVICE "/dev/sr0"
 // 声卡设备
 #define PCM_DEVICE "default"
+// SD卡设备
+#define SDMMC_DEVICE "/dev/mmcblk0p1"
 
 led_t *mute_handle = NULL;
 pthread_t cd_thread;
@@ -23,7 +27,23 @@ APP_CDIO app_cdio;
 
 // 从dvdplayer.c引用的函数声明
 int play_dvd(const char *cd_dev, APP_CDIO *pCDIO);
+int play_sdmmc(const char *dev, APP_CDIO *pCDIO);
 int reconfigure_alsa_rate(snd_pcm_t *pcm_handle, unsigned int sample_rate, uint8_t format);
+
+int check_sdmmc_device(const char *dev)
+{
+    struct stat st;
+    if (stat(dev, &st) == 0 && S_ISBLK(st.st_mode)) 
+    {
+        printf("sdmmc exists and is block device\n");
+        return 0;
+    } 
+    else 
+    {
+        printf("sdmmc not present\n");
+    }
+    return -1;
+}
 
 void apply_volume(void *buffer, size_t bytes, float *volume)
 {
@@ -436,7 +456,23 @@ void *cd_player_thread_entry(void *arg)
         return NULL;
     }
     // reconfigure_alsa_rate(app_cdio.pcm_handle, 44100, 16); // 放到readCDInfo里设置了
-    while (1)
+    
+    bool sdmmc_present = (check_sdmmc_device(SDMMC_DEVICE) == 0);
+    
+    while (sdmmc_present)
+    {
+        printf("SDMMC device detected, playing SDMMC audio\n");
+        pthread_mutex_lock(&app_cdio.lock);
+        app_cdio.cdio = NULL;
+        app_cdio.album_ready_flag = 0;
+        app_cdio.now_title[0] = '\0';
+        pthread_mutex_unlock(&app_cdio.lock);
+        play_sdmmc(SDMMC_DEVICE, &app_cdio);
+        sleep(2);
+        sdmmc_present = (check_sdmmc_device(SDMMC_DEVICE) == 0);
+    }
+
+    while (!sdmmc_present)
     {
         pthread_mutex_lock(&app_cdio.lock);
         app_cdio.cdda_ready_flag = 0;
@@ -468,6 +504,9 @@ void *cd_player_thread_entry(void *arg)
         if (app_cdio.disc_mode == CDIO_DISC_MODE_CD_DA)
         {
             printf("This is a CD-DA disc\n");
+            pthread_mutex_lock(&app_cdio.lock);
+            app_cdio.now_title[0] = '\0';
+            pthread_mutex_unlock(&app_cdio.lock);
             readCDInfo(&app_cdio); // 这是CD-DA光碟，播放CD音轨
         }
         else if (app_cdio.disc_mode == CDIO_DISC_MODE_CD_DATA ||

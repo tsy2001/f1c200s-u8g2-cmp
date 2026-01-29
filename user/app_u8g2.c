@@ -87,6 +87,7 @@ void u8g2_cdplayer(void)
     uint8_t stop_flag, next_flag, prev_flag;
     char artist_buf[ONE_ALBUM_LENGTH];
     char title_buf[ONE_ALBUM_LENGTH];
+    char file_buf[ONE_ALBUM_LENGTH];
 
     pthread_mutex_lock(&app_cdio.lock);
     cdda_ready_flag = app_cdio.cdda_ready_flag;
@@ -103,6 +104,7 @@ void u8g2_cdplayer(void)
     // 搬运专辑信息到临时缓区
     artist_buf[0] = '\0';
     title_buf[0] = '\0';
+    file_buf[0] = '\0';
     if (app_cdio.album_info != NULL || app_cdio.album_artist != NULL)
     {
         int idx = (int)now_tracks - 1;
@@ -123,6 +125,11 @@ void u8g2_cdplayer(void)
         // 结束符
         artist_buf[ONE_ALBUM_LENGTH - 1] = '\0';
         title_buf[ONE_ALBUM_LENGTH - 1] = '\0';
+    }
+    if (app_cdio.now_title[0] != '\0')
+    {
+        strncpy(file_buf, app_cdio.now_title, ONE_ALBUM_LENGTH - 1);
+        file_buf[ONE_ALBUM_LENGTH - 1] = '\0';
     }
     pthread_mutex_unlock(&app_cdio.lock);
 
@@ -158,6 +165,11 @@ void u8g2_cdplayer(void)
             sprintf(oled_buffer, "%s-%s", artist, title);
             u8g2_SetFont(&u8g2, u8g2_font_spleen12x24_mf);
             u8g2_scroll_text(oled_buffer, 42, 128, 12);
+        }
+        else if (file_buf[0] != '\0')
+        {
+            u8g2_SetFont(&u8g2, u8g2_font_spleen12x24_mf);
+            u8g2_scroll_text(file_buf, 42, 128, 12);
         }
         else
         {
