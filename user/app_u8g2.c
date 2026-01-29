@@ -1,10 +1,13 @@
 #include <math.h>
+#include <stdio.h>
+#include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <signal.h>
 #include <linux/input.h>
 #include <pthread.h>
 #include "u8g2.h"
+#include "u8g2_font_MiSans.h"
 #include "u8g2port.h"
 #include "app_u8g2.h"
 #include "app_cdplayer.h"
@@ -43,7 +46,8 @@ void *ui_thread_entry(void *arg)
     while (1)
     {
         u8g2_cdplayer();
-        if (!album_ready_flag) usleep(100000); //sleep_ms(150);
+        if (!album_ready_flag) usleep(50000);
+        else usleep(10000);
     }
 
     u8g2_SetPowerSave(&u8g2, 1);
@@ -52,23 +56,32 @@ void *ui_thread_entry(void *arg)
     return NULL;
 }
 
-void u8g2_scroll_text(char *text, uint8_t y, uint16_t screen_width, uint8_t char_width)
+void u8g2_scroll_text(char *text, uint8_t y, uint16_t screen_width)
 {
     static int16_t offset = 0;
-    int16_t text_width = strlen(text) * char_width;
+    static char last_text[ONE_ALBUM_LENGTH * 2] = {0};
+    if (strncmp(last_text, text, sizeof(last_text)) != 0)
+    {
+        offset = 0;
+        snprintf(last_text, sizeof(last_text), "%s", text);
+    }
+    int16_t text_width = u8g2_GetUTF8Width(&u8g2, text);
 
     if (text_width <= screen_width)
     {
         int16_t x = (screen_width - text_width) / 2;
-        u8g2_DrawStr(&u8g2, x, y, text);
+        u8g2_DrawUTF8(&u8g2, x, y, text);
     }
     else
     {
-        u8g2_DrawStr(&u8g2, offset, y, text);
-        offset --;        
-        if (offset < -text_width)
+        int16_t gap = u8g2_GetUTF8Width(&u8g2, "  ");
+        int16_t period = text_width + gap;
+        u8g2_DrawUTF8(&u8g2, offset, y, text);
+        u8g2_DrawUTF8(&u8g2, offset + period, y, text);
+        offset--;
+        if (offset <= -period)
         {
-            offset = screen_width;
+            offset = 0;
         }
     }
 }
@@ -85,6 +98,7 @@ void u8g2_cdplayer(void)
     track_t total_tracks;
     float volume;
     uint8_t stop_flag, next_flag, prev_flag;
+    uint16_t album_entries;
     char artist_buf[ONE_ALBUM_LENGTH];
     char title_buf[ONE_ALBUM_LENGTH];
     char file_buf[ONE_ALBUM_LENGTH];
@@ -101,6 +115,7 @@ void u8g2_cdplayer(void)
     stop_flag = app_cdio.stop;
     next_flag = app_cdio.next;
     prev_flag = app_cdio.prev;
+    album_entries = app_cdio.album_entries;
     // 搬运专辑信息到临时缓区
     artist_buf[0] = '\0';
     title_buf[0] = '\0';
@@ -109,16 +124,16 @@ void u8g2_cdplayer(void)
     {
         int idx = (int)now_tracks - 1;
         // artist
-        if (app_cdio.album_artist && idx >= 0 && app_cdio.album_artist[idx])
+        if (app_cdio.album_artist && idx >= 0 && idx < album_entries && app_cdio.album_artist[idx])
         {
             strncpy(artist_buf, app_cdio.album_artist[idx], ONE_ALBUM_LENGTH - 1);
         }
-        else if (app_cdio.album_info && app_cdio.album_info[0])
+        else if (app_cdio.album_info && album_entries > 0 && app_cdio.album_info[0])
         {
             strncpy(artist_buf, app_cdio.album_info[0], ONE_ALBUM_LENGTH - 1);
         }
         // title
-        if (app_cdio.album_info && idx >= 0 && app_cdio.album_info[idx])
+        if (app_cdio.album_info && idx >= 0 && idx < album_entries && app_cdio.album_info[idx])
         {
             strncpy(title_buf, app_cdio.album_info[idx], ONE_ALBUM_LENGTH - 1);
         }
@@ -152,11 +167,11 @@ void u8g2_cdplayer(void)
         u8g2_DrawGlyph(&u8g2, 0, 21, 484);  // 喇叭
         u8g2_DrawGlyph(&u8g2, 45, 21, 567); // 专辑
 
-        u8g2_SetFont(&u8g2, u8g2_font_wqy14_t_chinese1);
+        u8g2_SetFont(&u8g2, u8g2_font_misans_thin_12_ascii);
         sprintf(oled_buffer, "%02d", (int)(volume*100));
-        u8g2_DrawStr(&u8g2, 23, 15, oled_buffer); // 音量
+        u8g2_DrawStr(&u8g2, 23, 16, oled_buffer); // 音量
         sprintf(oled_buffer, "%02d/%02d", now_tracks - 1, total_tracks);
-        u8g2_DrawStr(&u8g2, 67, 15, oled_buffer);
+        u8g2_DrawStr(&u8g2, 67, 16, oled_buffer);
         if (album_ready_flag && (artist_buf[0] != '\0' || title_buf[0] != '\0'))
         {
             // artist_buf是否为空，空则显示Unknown(todo：个别情况异常需修复)
@@ -164,12 +179,12 @@ void u8g2_cdplayer(void)
             const char *title = (title_buf[0] != '\0') ? title_buf : "Unknown";
             sprintf(oled_buffer, "%s-%s", artist, title);
             u8g2_SetFont(&u8g2, u8g2_font_spleen12x24_mf);
-            u8g2_scroll_text(oled_buffer, 42, 128, 12);
+            u8g2_scroll_text(oled_buffer, 42, 128);
         }
         else if (file_buf[0] != '\0')
         {
-            u8g2_SetFont(&u8g2, u8g2_font_spleen12x24_mf);
-            u8g2_scroll_text(file_buf, 42, 128, 12);
+            u8g2_SetFont(&u8g2, u8g2_font_misans_light_16_cjk);
+            u8g2_scroll_text(file_buf, 42, 128);
         }
         else
         {
@@ -208,7 +223,7 @@ void u8g2_cdplayer(void)
         static uint8_t stat = 0;
         static uint16_t counter = 0;
         counter++;
-        if (counter >= 5)
+        if (counter >= 10)
         {
             counter = 0;
             stat = !stat;
