@@ -30,7 +30,8 @@ extern "C" {
 #define U8G2_FONT_SECTION(name) U8X8_FONT_SECTION(name) 
 #endif
 
-extern const uint8_t u8g2_font_misans_thin_14_ascii[] U8G2_FONT_SECTION("u8g2_font_misans_thin_14_ascii");
+extern const uint8_t u8g2_font_misans_thin_9_ascii[] U8G2_FONT_SECTION("u8g2_font_misans_thin_9_ascii");
+extern const uint8_t u8g2_font_misans_thin_12_ascii[] U8G2_FONT_SECTION("u8g2_font_misans_thin_12_ascii");
 extern const uint8_t u8g2_font_misans_light_16_cjk[] U8G2_FONT_SECTION("u8g2_font_misans_light_16_cjk");
 
 #ifdef __cplusplus
