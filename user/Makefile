@@ -24,6 +24,7 @@ LDFLAGS := --sysroot=$(SYSROOT)
 LDLIBS  := -lrt -lasound -lcdio -lpthread -lm
 
 LOCAL_SRCS := \
+  u8g2_font_MiSans.c \
   u8g2_hw_i2c.c \
   dvdplayer.c \
   dr_libs_impl.c \
