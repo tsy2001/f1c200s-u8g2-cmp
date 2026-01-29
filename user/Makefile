@@ -19,14 +19,14 @@ CPPFLAGS := \
   -I$(ROOT)/dr_libs \
   -D__ARM_LINUX__
 
-CFLAGS  := --sysroot=$(SYSROOT) -std=c99 -Wall -MMD -MP -O2 -g0 -pipe \
+CFLAGS  := --sysroot=$(SYSROOT) -std=c99 -Wall -MMD -MP -O2 -g0 -pipe -flto=auto \
   -march=armv5te -mtune=arm926ej-s -marm \
   -mfloat-abi=soft -msoft-float \
   -fomit-frame-pointer \
   -fno-strict-aliasing \
   -ffunction-sections -fdata-sections \
   -D_POSIX_C_SOURCE=200809L
-LDFLAGS := --sysroot=$(SYSROOT) -Wl,-O1 -Wl,--as-needed -Wl,--gc-sections
+LDFLAGS := --sysroot=$(SYSROOT) -flto=auto -Wl,-O1 -Wl,--as-needed -Wl,--gc-sections
 LDLIBS  := -lrt -lasound -lcdio -lpthread -lm
 
 LOCAL_SRCS := \
