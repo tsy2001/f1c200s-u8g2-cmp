@@ -27,6 +27,7 @@ typedef struct {
 
     char **album_info;
     char **album_artist;
+    uint16_t album_entries;
     char now_title[ONE_ALBUM_LENGTH];
 
     uint8_t album_ready_flag;

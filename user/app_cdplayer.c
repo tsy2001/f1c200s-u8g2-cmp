@@ -26,6 +26,7 @@ pthread_attr_t cd_thread_attr;
 APP_CDIO app_cdio;
 
 // 从dvdplayer.c引用的函数声明
+int cdrom_set_speed(const char *dev_path, int speed_x);
 int play_dvd(const char *cd_dev, APP_CDIO *pCDIO);
 int play_sdmmc(const char *dev, APP_CDIO *pCDIO);
 int reconfigure_alsa_rate(snd_pcm_t *pcm_handle, unsigned int sample_rate, uint8_t format);
@@ -59,6 +60,40 @@ void apply_volume(void *buffer, size_t bytes, float *volume)
     {
         int32_t scaled = (int32_t)(pcm_data[i] * *volume);
         pcm_data[i] = (int16_t)(scaled > INT16_MAX ? INT16_MAX : (scaled < INT16_MIN ? INT16_MIN : scaled));
+    }
+}
+
+void free_album_arrays(char **album_info, char **album_artist, uint16_t entries)
+{
+    if (album_info)
+    {
+        if (entries > 0)
+        {
+            for (uint16_t i = 0; i < entries; i++)
+                if(album_info[i] != NULL) free(album_info[i]);
+        }
+        if(album_info != NULL) free(album_info);
+    }
+
+    if (album_artist)
+    {
+        if (entries > 0)
+        {
+            for (uint16_t i = 0; i < entries; i++)
+                if(album_artist[i] != NULL) free(album_artist[i]);
+        }
+        if(album_artist != NULL) free(album_artist);
+    }
+}
+
+void clear_album_info_handle(APP_CDIO *pCDIO)
+{
+    if (pCDIO->album_info || pCDIO->album_artist)
+    {
+        free_album_arrays(pCDIO->album_info, pCDIO->album_artist, pCDIO->album_entries);
+        pCDIO->album_info = NULL;
+        pCDIO->album_artist = NULL;
+        pCDIO->album_entries = 0;
     }
 }
 
@@ -284,18 +319,30 @@ void readCDInfo(APP_CDIO *pCDIO)
     if (cd_for_lsns) app_cdio_release_cdio();
 
     // read_text:
-    pCDIO->album_ready_flag = 0;
     CdIo *cdtext_cd = app_cdio_acquire_cdio();
-    pCDIO->cdtext = cdtext_cd ? cdio_get_cdtext(cdtext_cd) : NULL;
-    if (pCDIO->cdtext)
+    cdtext_t *cdtext = cdtext_cd ? cdio_get_cdtext(cdtext_cd) : NULL;
+    uint16_t new_entries = 0;
+    char **new_album_info = NULL;
+    char **new_album_artist = NULL;
+    uint8_t new_album_ready = 0;
+
+    track_t now_tracks_snapshot;
+    track_t total_tracks_snapshot;
+    pthread_mutex_lock(&pCDIO->lock);
+    now_tracks_snapshot = pCDIO->now_tracks;
+    total_tracks_snapshot = pCDIO->total_tracks;
+    pthread_mutex_unlock(&pCDIO->lock);
+
+    if (cdtext)
     {
         // 似乎没用，buildroot编译libcdio时只支持英文解码
-        int cd_text_language = cdtext_get_language(pCDIO->cdtext);
+        int cd_text_language = cdtext_get_language(cdtext);
         printf("cd-text language index: %d, language: %s\n", cd_text_language, cdtext_lang2str(cd_text_language));
 
-        track_t i_last_track = pCDIO->now_tracks + pCDIO->total_tracks;
+        track_t i_last_track = now_tracks_snapshot + total_tracks_snapshot;
+        new_entries = (uint16_t)(i_last_track + 1);
 
-        if (cdtext_select_language(pCDIO->cdtext, cd_text_language))
+        if (cdtext_select_language(cdtext, cd_text_language))
         {
             printf("%s selected\n", cdtext_lang2str(cd_text_language));
         }
@@ -303,87 +350,74 @@ void readCDInfo(APP_CDIO *pCDIO)
         {
             printf("'%s' is not available, Using '%s'\n",
                    cdtext_lang2str(cd_text_language),
-                   cdtext_lang2str(cdtext_get_language(pCDIO->cdtext)));
-        }
-
-        // 清除之前分配的内存
-        printf("free previous album info if any\n");
-        if (pCDIO->album_info != NULL)
-        {
-            free(pCDIO->album_info);
-            pCDIO->album_info = NULL;
-        }
-
-        if (pCDIO->album_artist != NULL)
-        {
-            free(pCDIO->album_artist);
-            pCDIO->album_artist = NULL;
+                   cdtext_lang2str(cdtext_get_language(cdtext)));
         }
 
         // 分配新的内存，album_info：歌曲名，album_artist：歌手名
         printf("allocate album info/artist arrays\n");
-        pCDIO->album_info = calloc((i_last_track + 1), sizeof(char *));
-        pCDIO->album_artist = calloc((i_last_track + 1), sizeof(char *));
+        new_album_info = calloc(new_entries, sizeof(char *));
+        new_album_artist = calloc(new_entries, sizeof(char *));
 
-        if (!pCDIO->album_info || !pCDIO->album_artist)
+        if (!new_album_info || !new_album_artist)
         {
             printf("Failed to allocate memory for album info/artist\n");
-            if (pCDIO->album_info) { free(pCDIO->album_info); pCDIO->album_info = NULL; }
-            if (pCDIO->album_artist) { free(pCDIO->album_artist); pCDIO->album_artist = NULL; }
+            free_album_arrays(new_album_info, new_album_artist, new_entries);
+            new_album_info = NULL;
+            new_album_artist = NULL;
+            new_entries = 0;
         }
         else
         {
             // 为了方便ui线程读取，第0个作为dummy占位
-            const char *album_title = cdtext_get_const(pCDIO->cdtext, CDTEXT_FIELD_TITLE, 0);
-            pCDIO->album_info[0] = album_title ? strdup(album_title) : NULL;
-            pCDIO->album_artist[0] = album_title ? strdup(album_title) : NULL;
+            const char *album_title = cdtext_get_const(cdtext, CDTEXT_FIELD_TITLE, 0);
+            new_album_info[0] = album_title ? strdup(album_title) : NULL;
+            new_album_artist[0] = album_title ? strdup(album_title) : NULL;
 
             for (track_t ii = 1; ii <= i_last_track; ii++)
             {
-                const char *track_title = cdtext_get_const(pCDIO->cdtext, CDTEXT_FIELD_TITLE, pCDIO->now_tracks + ii - 1);
-                const char *track_artist = cdtext_get_const(pCDIO->cdtext, CDTEXT_FIELD_PERFORMER, pCDIO->now_tracks + ii - 1);
+                const char *track_title = cdtext_get_const(cdtext, CDTEXT_FIELD_TITLE, now_tracks_snapshot + ii - 1);
+                const char *track_artist = cdtext_get_const(cdtext, CDTEXT_FIELD_PERFORMER, now_tracks_snapshot + ii - 1);
 
-                pCDIO->album_info[ii] = track_title ? strdup(track_title) : NULL;
-                pCDIO->album_artist[ii] = track_artist ? strdup(track_artist) : NULL;
+                new_album_info[ii] = track_title ? strdup(track_title) : NULL;
+                new_album_artist[ii] = track_artist ? strdup(track_artist) : NULL;
             }
-        }
-        // 都拷贝完毕了，可以释放cdtext
-        cdtext_destroy(pCDIO->cdtext);
 
-        if (pCDIO->album_info)
-        {
             // 打印cd text信息
-            printf("Album: %s\n", pCDIO->album_info[0] ? pCDIO->album_info[0] : "Unknown");
+            printf("Album: %s\n", new_album_info[0] ? new_album_info[0] : "Unknown");
             for (track_t i = 1; i < i_last_track; i++)
             {
-                printf("%d: %s - %s\n", i, pCDIO->album_artist[i] ? pCDIO->album_artist[i] : "Unknown", pCDIO->album_info[i] ? pCDIO->album_info[i] : "Unknown");
+                printf("%d: %s - %s\n", i,
+                       new_album_artist[i] ? new_album_artist[i] : "Unknown",
+                       new_album_info[i] ? new_album_info[i] : "Unknown");
             }
             // 使用nero或ONES软件刻录的光盘，title一般都是Music或Audio，中文编码乱码，所以不要显示cd text
-            if (pCDIO->album_info[0] != NULL && (strstr(pCDIO->album_info[0], "Music") || strstr(pCDIO->album_info[0], "Audio")))
+            if (new_album_info[0] != NULL &&
+                (strstr(new_album_info[0], "Music") || strstr(new_album_info[0], "Audio")))
             {
-                pCDIO->album_ready_flag = 0;
+                new_album_ready = 0;
             }
             else
             {
-                pCDIO->album_ready_flag = 1;
+                new_album_ready = 1;
             }
         }
-        else
-        {
-            pCDIO->album_ready_flag = 0;
-            printf("album_info got null pointer\n");
-        }
+        // 都拷贝完毕了，可以释放cdtext
+        cdtext_destroy(cdtext);
     }
     else
     {
-        pCDIO->album_ready_flag = 0;
-        if (pCDIO->album_info != NULL)
-        {
-            free(pCDIO->album_info);
-        }
         printf("No CD text information available\n");
     }
     if (cdtext_cd) app_cdio_release_cdio();
+
+    pthread_mutex_lock(&pCDIO->lock);
+    clear_album_info_handle(pCDIO);
+    pCDIO->album_info = new_album_info;
+    pCDIO->album_artist = new_album_artist;
+    pCDIO->album_entries = new_entries;
+    pCDIO->album_ready_flag = new_album_ready;
+    pCDIO->cdtext = NULL;
+    pthread_mutex_unlock(&pCDIO->lock);
 
     // 进入播放循环
     while (1)
@@ -456,14 +490,16 @@ void *cd_player_thread_entry(void *arg)
         return NULL;
     }
     // reconfigure_alsa_rate(app_cdio.pcm_handle, 44100, 16); // 放到readCDInfo里设置了
-    
+    cdrom_set_speed(OPTICAL_DEVICE, 4);
     bool sdmmc_present = (check_sdmmc_device(SDMMC_DEVICE) == 0);
+    // sdmmc_present = false;  // 测试用，强制不检测到sd卡
     
     while (sdmmc_present)
     {
         printf("SDMMC device detected, playing SDMMC audio\n");
         pthread_mutex_lock(&app_cdio.lock);
         app_cdio.cdio = NULL;
+        clear_album_info_handle(&app_cdio);
         app_cdio.album_ready_flag = 0;
         app_cdio.now_title[0] = '\0';
         pthread_mutex_unlock(&app_cdio.lock);
@@ -519,6 +555,7 @@ void *cd_player_thread_entry(void *arg)
             cdio_destroy(cd);
             pthread_mutex_lock(&app_cdio.lock);
             app_cdio.cdio = NULL;
+            clear_album_info_handle(&app_cdio);
             app_cdio.album_ready_flag = 0;
             pthread_mutex_unlock(&app_cdio.lock);
             play_dvd("/dev/sr0", &app_cdio); // 这是个DVD/CD-ROM光碟，当作存储器挂载播放
@@ -552,6 +589,7 @@ void *cd_player_thread_entry(void *arg)
 
             CdIo *cdio_to_destroy = NULL;
             pthread_mutex_lock(&app_cdio.lock);
+            clear_album_info_handle(&app_cdio);
             app_cdio.album_ready_flag = 0;
             app_cdio.ejct = 0;
             app_cdio.eject_in_progress = 0;
@@ -567,6 +605,7 @@ void *cd_player_thread_entry(void *arg)
                     pthread_cond_wait(&app_cdio.cond, &app_cdio.lock);
                 }
                 pthread_mutex_unlock(&app_cdio.lock);
+                // todo: 为什么还会报Segmental fault???
                 // cdio_destroy(cdio_to_destroy);
             }
 
@@ -580,6 +619,7 @@ void *cd_player_thread_entry(void *arg)
             cdio_close_tray(OPTICAL_DEVICE, NULL);
             CdIo *cdio_to_destroy = NULL;
             pthread_mutex_lock(&app_cdio.lock);
+            clear_album_info_handle(&app_cdio);
             app_cdio.album_ready_flag = 0;
             cdio_to_destroy = app_cdio.cdio;
             app_cdio.cdio = NULL;
@@ -593,6 +633,7 @@ void *cd_player_thread_entry(void *arg)
                     pthread_cond_wait(&app_cdio.cond, &app_cdio.lock);
                 }
                 pthread_mutex_unlock(&app_cdio.lock);
+                // todo: 为什么还会报Segmental fault???
                 // cdio_destroy(cdio_to_destroy);
             }
         }
