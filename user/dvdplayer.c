@@ -435,6 +435,12 @@ int scan_audio_files(const char *path, char ***audio_files)
 // 根据文件扩展名检测音频格式
 audio_format_t detect_audio_format(const char *file_path)
 {
+    // macOS拷贝的文件会产生._垃圾文件，忽略它们
+    const char *name = strrchr(file_path, '/');
+    name = name ? name + 1 : file_path;
+    if (name[0] == '.' && name[1] == '_')
+        return AUDIO_FORMAT_UNKNOWN;
+
     const char *ext = strrchr(file_path, '.');
     if (!ext)
         return AUDIO_FORMAT_UNKNOWN;
