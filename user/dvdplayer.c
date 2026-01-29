@@ -422,8 +422,20 @@ int scan_audio_files(const char *path, char ***audio_files)
         if (fmt != AUDIO_FORMAT_UNKNOWN)
         {
             // 拼接完整路径
-            (*audio_files)[index] = (char *)malloc(strlen(path) + strlen(entry->d_name) + 2);
-            snprintf((*audio_files)[index], strlen(path) + strlen(entry->d_name) + 2, "%s/%s", path, entry->d_name);
+            size_t full_len = strlen(path) + strlen(entry->d_name) + 2;
+            char *full_path = (char *)malloc(full_len);
+            if (!full_path)
+            {
+                perror("Memory allocation failed for audio path");
+                for (int i = 0; i < index; i++)
+                    free((*audio_files)[i]);
+                free(*audio_files);
+                *audio_files = NULL;
+                closedir(dir);
+                return -1;
+            }
+            snprintf(full_path, full_len, "%s/%s", path, entry->d_name);
+            (*audio_files)[index] = full_path;
             index++;
         }
     }
@@ -1059,6 +1071,11 @@ int play_mp3(const char *file_path, APP_CDIO *pCDIO)
 
 int play_audio(const char *file_path, APP_CDIO *pCDIO)
 {
+    if (!file_path)
+    {
+        fprintf(stderr, "play_audio: file_path is NULL\n");
+        return AUDIO_ERROR;
+    }
     audio_format_t fmt = detect_audio_format(file_path);
     const char *name = strrchr(file_path, '/');
     name = name ? name + 1 : file_path;
