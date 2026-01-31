@@ -10,6 +10,7 @@
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
+#include <errno.h>
 #include <linux/cdrom.h>
 #include <unistd.h>
 #include <time.h>
@@ -467,19 +468,88 @@ audio_format_t detect_audio_format(const char *file_path)
     return AUDIO_FORMAT_UNKNOWN;
 }
 
+// 从/dev/urandom读取随机数据
+int read_urandom(void *buf, size_t len)
+{
+    int urandom_fd = open("/dev/urandom", O_RDONLY);
+    if (urandom_fd < 0) return -1;
+
+    size_t off = 0;
+    while (off < len)
+    {
+        ssize_t n = read(urandom_fd, (char *)buf + off, len - off);
+        if (n < 0)
+        {
+            if (errno == EINTR) continue;
+            close(urandom_fd);
+            return -1;
+        }
+        if (n == 0)
+        {
+            close(urandom_fd);
+            return -1;
+        }
+        off += (size_t)n;
+    }
+
+    close(urandom_fd);
+    return 0;
+}
+
+// 初始化伪随机数生成器
+void seed_prng_once(void)
+{
+    static int seeded = 0;
+    if (seeded) return;
+
+    // 构造一个不会重复的32位种子值：当前时间、进程ID、栈地址、/dev/urandom数据
+    uint32_t seed = (uint32_t)time(NULL) ^ (uint32_t)getpid() ^ (uint32_t)(uintptr_t)&seed;
+    uint32_t extra = 0;
+    if (read_urandom(&extra, sizeof(extra)) == 0) seed ^= extra;
+    srand(seed);
+    seeded = 1;
+}
+
+// 生成一个32位随机数
+uint32_t random_u32(void)
+{
+    uint32_t r = 0;
+    if (read_urandom(&r, sizeof(r)) == 0)
+        return r;
+
+    seed_prng_once();
+    r = (uint32_t)rand();
+    r = (r << 16) ^ (uint32_t)rand();
+    return r;
+}
+
+// 限幅
+uint32_t random_bounded_u32(uint32_t bound)
+{
+    if (bound == 0)
+        return 0;
+
+    uint32_t limit = UINT32_MAX - (UINT32_MAX % bound);
+    uint32_t r = 0;
+    do
+    {
+        r = random_u32();
+    } while (r >= limit);
+    return r % bound;
+}
+
 // 生成一个不重复的随机索引数组
 void generate_random_indices(int *indices, int count)
 {
-    srand(time(NULL));
     // 填充数组
     for (int i = 0; i < count; i++)
     {
         indices[i] = i;
     }
     // 打乱数组
-    for (int i = 0; i < count; i++)
+    for (int i = count - 1; i > 0; i--)
     {
-        int j = rand() % count;
+        uint32_t j = random_bounded_u32((uint32_t)i + 1);
         int temp = indices[i];
         indices[i] = indices[j];
         indices[j] = temp;
