@@ -6,9 +6,9 @@
 #include <signal.h>
 #include <linux/input.h>
 #include <pthread.h>
-#include "u8g2.h"
-#include "u8g2_font_MiSans.h"
-#include "u8g2port.h"
+#include <u8g2/u8g2.h>
+#include "u8g2_fonts.h"
+#include "led.h"
 #include "app_u8g2.h"
 #include "app_cdplayer.h"
 #include "logo.h"
@@ -37,11 +37,7 @@ void app_u8g2_wait(void)
 
 void *ui_thread_entry(void *arg)
 {
-    u8g2_Setup_ssd1312_i2c_128x64_noname_f(&u8g2, U8G2_R0,
-                                           u8x8_byte_arm_linux_hw_i2c, u8x8_arm_linux_gpio_and_delay);
-    init_i2c_hw(&u8g2, I2C_BUS);
-    u8g2_InitDisplay(&u8g2);
-    u8g2_SetPowerSave(&u8g2, 0);
+    libu8g2_Setup(&u8g2, I2C_BUS);
 
     while (1)
     {
@@ -50,9 +46,7 @@ void *ui_thread_entry(void *arg)
         else usleep(10000);
     }
 
-    u8g2_SetPowerSave(&u8g2, 1);
-    done_i2c();
-    done_user_data(&u8g2);
+    libu8g2_Done(&u8g2);
     return NULL;
 }
 

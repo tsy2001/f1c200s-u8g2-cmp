@@ -34,6 +34,13 @@ extern const uint8_t u8g2_font_misans_thin_9_ascii[] U8G2_FONT_SECTION("u8g2_fon
 extern const uint8_t u8g2_font_misans_thin_12_ascii[] U8G2_FONT_SECTION("u8g2_font_misans_thin_12_ascii");
 extern const uint8_t u8g2_font_misans_light_16_cjk[] U8G2_FONT_SECTION("u8g2_font_misans_light_16_cjk");
 
+extern const uint8_t u8g2_font_streamline_all_t[] U8G2_FONT_SECTION("u8g2_font_streamline_all_t");
+extern const uint8_t u8g2_font_spleen12x24_mf[] U8G2_FONT_SECTION("u8g2_font_spleen12x24_mf");
+extern const uint8_t u8g2_font_open_iconic_all_2x_t[] U8G2_FONT_SECTION("u8g2_font_open_iconic_all_2x_t");
+extern const uint8_t u8g2_font_spleen8x16_mf[] U8G2_FONT_SECTION("u8g2_font_spleen8x16_mf");
+
+
+
 #ifdef __cplusplus
 }
 #endif

@@ -7,10 +7,8 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <linux/ioctl.h>
-
 #include "pwm.h"
 #include "beep.h"
-#include "u8g2port.h"
 
 static pwm_t *pwm_bandles = NULL;
 

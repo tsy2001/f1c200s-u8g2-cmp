@@ -1,4 +1,3 @@
-#include <u8g2port.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <signal.h>
@@ -7,8 +6,6 @@
 #include "app_u8g2.h"
 #include "app_button.h"
 #include "app_cdplayer.h"
-#include "u8g2.h"
-#include "u8g2port.h"
 
 
 int main(void)

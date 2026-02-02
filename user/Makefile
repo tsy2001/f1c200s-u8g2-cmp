@@ -11,8 +11,6 @@ OUTDIR := $(ROOT)/output/bin
 CPPFLAGS := \
   -I$(CURDIR) \
   -I$(ROOT)/drivers/src \
-  -I$(ROOT)/u8g2/csrc \
-  -I$(ROOT)/u8g2/sys/arm-linux/port \
   -I$(ROOT)/hardware/BEEP \
   -I$(ROOT)/hardware/I2C \
   -I$(ROOT)/hardware/MPU6050 \
@@ -27,10 +25,9 @@ CFLAGS  := --sysroot=$(SYSROOT) -std=c99 -Wall -MMD -MP -O2 -g0 -pipe -flto=auto
   -ffunction-sections -fdata-sections \
   -D_POSIX_C_SOURCE=200809L
 LDFLAGS := --sysroot=$(SYSROOT) -flto=auto -Wl,-O1 -Wl,--as-needed -Wl,--gc-sections
-LDLIBS  := -lrt -lasound -lcdio -lpthread -lm
+LDLIBS  := -lrt -lasound -lcdio -lpthread -lu8g2 -lu8g2font -lm
 
 LOCAL_SRCS := \
-  u8g2_font_MiSans.c \
   u8g2_hw_i2c.c \
   dvdplayer.c \
   dr_libs_impl.c \
@@ -39,18 +36,11 @@ LOCAL_SRCS := \
   app_cdplayer.c
 
 ROOT_SRCS := \
-  u8g2/sys/arm-linux/port/u8g2port.c \
-  drivers/src/gpio.c \
-  drivers/src/gpio_sysfs.c \
   drivers/src/led.c \
-  drivers/src/spi.c \
-  drivers/src/i2c.c \
   drivers/src/pwm.c \
   hardware/BEEP/beep.c
 
-U8G2_CSRCS := $(patsubst $(ROOT)/%,%,$(wildcard $(ROOT)/u8g2/csrc/*.c))
-
-SRCS := $(LOCAL_SRCS) $(ROOT_SRCS) $(U8G2_CSRCS)
+SRCS := $(LOCAL_SRCS) $(ROOT_SRCS)
 
 OBJS := $(patsubst %.c,$(OBJDIR)/%.o,$(SRCS))
 DEPS := $(OBJS:.o=.d)
