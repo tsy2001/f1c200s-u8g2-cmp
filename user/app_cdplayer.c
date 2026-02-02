@@ -490,28 +490,28 @@ void *cd_player_thread_entry(void *arg)
     }
     // reconfigure_alsa_rate(app_cdio.pcm_handle, 44100, 16); // 放到readCDInfo里设置了
     cdrom_set_speed(OPTICAL_DEVICE, 4);
-    bool sdmmc_present = (check_sdmmc_device(SDMMC_DEVICE) == 0);
-    // sdmmc_present = false;  // 测试用，强制不检测到sd卡
-    
-    while (sdmmc_present)
-    {
-        printf("SDMMC device detected, playing SDMMC audio\n");
-        pthread_mutex_lock(&app_cdio.lock);
-        app_cdio.cdio = NULL;
-        clear_album_info_handle(&app_cdio);
-        app_cdio.album_ready_flag = 0;
-        app_cdio.now_title[0] = '\0';
-        pthread_mutex_unlock(&app_cdio.lock);
-        play_sdmmc(SDMMC_DEVICE, &app_cdio);
-        sleep(2);
-        sdmmc_present = (check_sdmmc_device(SDMMC_DEVICE) == 0);
-    }
+    bool sdmmc_present = false;
 
-    while (!sdmmc_present)
+    while (1)
     {
         pthread_mutex_lock(&app_cdio.lock);
         app_cdio.cdda_ready_flag = 0;
         pthread_mutex_unlock(&app_cdio.lock);
+
+        sdmmc_present = (check_sdmmc_device(SDMMC_DEVICE) == 0);
+        if (sdmmc_present)
+        {
+            printf("SDMMC device detected, playing SDMMC audio\n");
+            pthread_mutex_lock(&app_cdio.lock);
+            app_cdio.cdio = NULL;
+            clear_album_info_handle(&app_cdio);
+            app_cdio.album_ready_flag = 0;
+            app_cdio.now_title[0] = '\0';
+            pthread_mutex_unlock(&app_cdio.lock);
+            play_sdmmc(SDMMC_DEVICE, &app_cdio);
+            sleep(2);
+            continue;
+        }
 
         CdIo *cd = cdio_open(OPTICAL_DEVICE, DRIVER_DEVICE);
         if (!cd)
