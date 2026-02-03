@@ -7,6 +7,7 @@
 #include <cdio/mmc.h>
 #include <alsa/asoundlib.h>
 #include <pthread.h>
+#include "app_u8g2.h"
 
 #define BUFFER_SIZE (CDIO_CD_FRAMESIZE_RAW * 2)
 #define ONE_ALBUM_LENGTH 100
@@ -21,8 +22,8 @@ typedef struct {
     lsn_t total_lsn;    
     lsn_t now_lsn;
 
-    track_t now_tracks;
-    track_t total_tracks;
+    uint16_t now_tracks;
+    uint16_t total_tracks;
     uint16_t manual_track;
 
     char **album_info;

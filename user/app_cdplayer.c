@@ -502,16 +502,28 @@ void *cd_player_thread_entry(void *arg)
         sdmmc_present = (check_sdmmc_device(SDMMC_DEVICE) == 0);
         if (sdmmc_present)
         {
+            uint8_t eject_flag = 0;
             printf("SDMMC device detected, playing SDMMC audio\n");
             pthread_mutex_lock(&app_cdio.lock);
             app_cdio.cdio = NULL;
+            eject_flag = app_cdio.ejct;
+            if (app_cdio.ejct) app_cdio.eject_in_progress = 1;
             clear_album_info_handle(&app_cdio);
             app_cdio.album_ready_flag = 0;
             app_cdio.now_title[0] = '\0';
             pthread_mutex_unlock(&app_cdio.lock);
+            if(eject_flag) {sleep(2); continue;}
             play_sdmmc(SDMMC_DEVICE, &app_cdio);
             sleep(2);
             continue;
+        } else {
+            pthread_mutex_lock(&app_cdio.lock);
+            if (app_cdio.ejct || app_cdio.eject_in_progress) {
+                app_cdio.album_ready_flag = 0;
+                app_cdio.ejct = 0;
+                app_cdio.eject_in_progress = 0;
+            }
+            pthread_mutex_unlock(&app_cdio.lock);
         }
 
         CdIo *cd = cdio_open(OPTICAL_DEVICE, DRIVER_DEVICE);
