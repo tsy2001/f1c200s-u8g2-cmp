@@ -10,6 +10,7 @@ OUTDIR := $(ROOT)/output/bin
 
 CPPFLAGS := \
   -I$(CURDIR) \
+  -I$(ROOT) \
   -I$(ROOT)/drivers/src \
   -I$(ROOT)/hardware/BEEP \
   -I$(ROOT)/hardware/I2C \
@@ -38,7 +39,8 @@ LOCAL_SRCS := \
 ROOT_SRCS := \
   drivers/src/led.c \
   drivers/src/pwm.c \
-  hardware/BEEP/beep.c
+  hardware/BEEP/beep.c \
+  dsd2pcm/dsd2pcm.c
 
 SRCS := $(LOCAL_SRCS) $(ROOT_SRCS)
 

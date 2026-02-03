@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <limits.h>
 #include <string.h>
 #include <strings.h>
 #include <dirent.h>
@@ -18,6 +19,7 @@
 #include <dr_flac.h>
 #include <dr_wav.h>
 #include <dr_mp3.h>
+#include "dsd2pcm/dsd2pcm.h"
 #include <app_cdplayer.h>
 
 #define MOUNT_POINT "/mnt"
@@ -27,7 +29,8 @@ typedef enum {
     AUDIO_FORMAT_UNKNOWN = 0,
     AUDIO_FORMAT_FLAC,
     AUDIO_FORMAT_WAV,
-    AUDIO_FORMAT_MP3
+    AUDIO_FORMAT_MP3,
+    AUDIO_FORMAT_DSD
 } audio_format_t;
 
 // 播放汉书返回值
@@ -41,6 +44,7 @@ typedef enum {
 // alsa缓冲区大小定义
 #define ALSA_PERIOD_FRAMES 2048
 #define ALSA_BUFFER_FRAMES 8192
+#define DSD_BLOCK_FRAMES 8192
 
 static inline void to_stereo_s16(const int16_t *in, uint64_t frames, unsigned int channels, int16_t *out)
 {
@@ -91,7 +95,269 @@ audio_format_t detect_audio_format(const char *file_path);
 int play_flac(const char *file_path, APP_CDIO *pCDIO);
 int play_wav(const char *file_path, APP_CDIO *pCDIO);
 int play_mp3(const char *file_path, APP_CDIO *pCDIO);
+int play_dsd(const char *file_path, APP_CDIO *pCDIO);
 int reconfigure_alsa_rate(snd_pcm_t *pcm_handle, unsigned int sample_rate, uint8_t format);
+
+typedef struct {
+    uint32_t sample_rate;
+    uint32_t channels;
+    uint64_t sample_count;
+    uint64_t data_offset;
+    uint64_t data_size;
+    uint32_t block_size;
+    int lsbitfirst;
+    int interleaved;
+} dsd_info_t;
+
+static int read_exact(FILE *f, void *buf, size_t len)
+{
+    return fread(buf, 1, len, f) == len ? 0 : -1;
+}
+
+static uint16_t read_u16be(const unsigned char *p)
+{
+    return (uint16_t)((p[0] << 8) | p[1]);
+}
+
+static uint32_t read_u32be(const unsigned char *p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+}
+
+static uint64_t read_u64be(const unsigned char *p)
+{
+    return ((uint64_t)p[0] << 56) | ((uint64_t)p[1] << 48) | ((uint64_t)p[2] << 40) | ((uint64_t)p[3] << 32) |
+           ((uint64_t)p[4] << 24) | ((uint64_t)p[5] << 16) | ((uint64_t)p[6] << 8) | (uint64_t)p[7];
+}
+
+static uint32_t read_u32le(const unsigned char *p)
+{
+    return ((uint32_t)p[3] << 24) | ((uint32_t)p[2] << 16) | ((uint32_t)p[1] << 8) | (uint32_t)p[0];
+}
+
+static uint64_t read_u64le(const unsigned char *p)
+{
+    return ((uint64_t)p[7] << 56) | ((uint64_t)p[6] << 48) | ((uint64_t)p[5] << 40) | ((uint64_t)p[4] << 32) |
+           ((uint64_t)p[3] << 24) | ((uint64_t)p[2] << 16) | ((uint64_t)p[1] << 8) | (uint64_t)p[0];
+}
+
+static int skip_fwd(FILE *f, uint64_t bytes)
+{
+    if (bytes == 0)
+        return 0;
+    if (bytes > (uint64_t)INT64_MAX)
+        return -1;
+    return fseeko(f, (off_t)bytes, SEEK_CUR);
+}
+
+static int parse_dsf(FILE *f, dsd_info_t *info)
+{
+    unsigned char hdr[28];
+    if (read_exact(f, hdr, sizeof(hdr)) < 0)
+        return -1;
+    if (memcmp(hdr, "DSD ", 4) != 0)
+        return -1;
+
+    int got_fmt = 0;
+    int got_data = 0;
+    while (!got_data)
+    {
+        unsigned char id[4];
+        unsigned char size_buf[8];
+        if (read_exact(f, id, sizeof(id)) < 0)
+            break;
+        if (read_exact(f, size_buf, sizeof(size_buf)) < 0)
+            break;
+        uint64_t chunk_size = read_u64le(size_buf);
+        if (chunk_size == 0)
+            return -1;
+
+        uint64_t data_size = chunk_size;
+        if (chunk_size == 52)
+            data_size = 40;
+        else if (chunk_size > 12)
+            data_size = chunk_size - 12;
+
+        if (memcmp(id, "fmt ", 4) == 0)
+        {
+            unsigned char fmt_buf[40];
+            if (data_size < sizeof(fmt_buf))
+                return -1;
+            if (read_exact(f, fmt_buf, sizeof(fmt_buf)) < 0)
+                return -1;
+            if (data_size > sizeof(fmt_buf))
+            {
+                if (skip_fwd(f, data_size - sizeof(fmt_buf)) < 0)
+                    return -1;
+            }
+            info->channels = read_u32le(fmt_buf + 12);
+            info->sample_rate = read_u32le(fmt_buf + 16);
+            info->sample_count = read_u64le(fmt_buf + 24);
+            info->block_size = read_u32le(fmt_buf + 32);
+            info->lsbitfirst = 1;
+            info->interleaved = 0;
+            got_fmt = 1;
+        }
+        else if (memcmp(id, "data", 4) == 0)
+        {
+            unsigned char ds_buf[8];
+            if (read_exact(f, ds_buf, sizeof(ds_buf)) < 0)
+                return -1;
+            info->data_size = read_u64le(ds_buf);
+            if (info->data_size == 0 && chunk_size > 20)
+                info->data_size = chunk_size - 20;
+            info->data_offset = (uint64_t)ftello(f);
+            info->lsbitfirst = 1;
+            info->interleaved = 0;
+            got_data = 1;
+            if (got_fmt)
+                return 0;
+        }
+        else
+        {
+            if (skip_fwd(f, data_size) < 0)
+                return -1;
+        }
+    }
+
+    return (got_fmt && got_data) ? 0 : -1;
+}
+
+static int parse_dff(FILE *f, dsd_info_t *info)
+{
+    unsigned char hdr[12];
+    if (read_exact(f, hdr, sizeof(hdr)) < 0)
+        return -1;
+    if (memcmp(hdr, "FRM8", 4) != 0)
+        return -1;
+
+    uint64_t form_size = read_u64be(hdr + 4);
+    unsigned char form_type[4];
+    if (read_exact(f, form_type, sizeof(form_type)) < 0)
+        return -1;
+    if (memcmp(form_type, "DSD ", 4) != 0)
+        return -1;
+
+    int got_prop = 0;
+    int got_data = 0;
+    off_t form_end = ftello(f);
+    if (form_size < 4)
+        return -1;
+    if (form_size > (uint64_t)INT64_MAX)
+        return -1;
+    form_end += (off_t)(form_size - 4);
+
+    while (ftello(f) < form_end)
+    {
+        unsigned char id[4];
+        unsigned char size_buf[8];
+        if (read_exact(f, id, sizeof(id)) < 0)
+            break;
+        if (read_exact(f, size_buf, sizeof(size_buf)) < 0)
+            break;
+        uint64_t chunk_size = read_u64be(size_buf);
+        if (chunk_size == 0)
+            return -1;
+        off_t data_start = ftello(f);
+
+        if (memcmp(id, "PROP", 4) == 0)
+        {
+            unsigned char prop_type[4];
+            if (read_exact(f, prop_type, sizeof(prop_type)) < 0)
+                return -1;
+            uint64_t prop_remaining = chunk_size >= 4 ? chunk_size - 4 : 0;
+            if (memcmp(prop_type, "SND ", 4) != 0)
+            {
+                if (skip_fwd(f, prop_remaining) < 0)
+                    return -1;
+            }
+            else
+            {
+                off_t prop_end = ftello(f) + (off_t)prop_remaining;
+                while (ftello(f) + 12 <= prop_end)
+                {
+                    unsigned char pid[4];
+                    unsigned char psz_buf[8];
+                    if (read_exact(f, pid, sizeof(pid)) < 0)
+                        return -1;
+                    if (read_exact(f, psz_buf, sizeof(psz_buf)) < 0)
+                        return -1;
+                    uint64_t psz = read_u64be(psz_buf);
+                    off_t pstart = ftello(f);
+
+                    if (memcmp(pid, "FS  ", 4) == 0 && psz >= 4)
+                    {
+                        unsigned char fs_buf[4];
+                        if (read_exact(f, fs_buf, sizeof(fs_buf)) < 0)
+                            return -1;
+                        info->sample_rate = read_u32be(fs_buf);
+                    }
+                    else if (memcmp(pid, "CHNL", 4) == 0 && psz >= 2)
+                    {
+                        unsigned char ch_buf[2];
+                        if (read_exact(f, ch_buf, sizeof(ch_buf)) < 0)
+                            return -1;
+                        info->channels = read_u16be(ch_buf);
+                    }
+                    else if (memcmp(pid, "CMPR", 4) == 0 && psz >= 4)
+                    {
+                        unsigned char cmpr_buf[4];
+                        if (read_exact(f, cmpr_buf, sizeof(cmpr_buf)) < 0)
+                            return -1;
+                        if (memcmp(cmpr_buf, "DSD ", 4) != 0)
+                            return -1;
+                    }
+
+                    uint64_t consumed = (uint64_t)(ftello(f) - pstart);
+                    if (consumed > psz)
+                        return -1;
+                    if (skip_fwd(f, psz - consumed) < 0)
+                        return -1;
+                    if (psz & 1)
+                        if (skip_fwd(f, 1) < 0)
+                            return -1;
+                }
+            }
+            got_prop = 1;
+        }
+        else if (memcmp(id, "DSD ", 4) == 0)
+        {
+            info->data_offset = (uint64_t)data_start;
+            info->data_size = chunk_size;
+            info->lsbitfirst = 0;
+            info->interleaved = 1;
+            got_data = 1;
+        }
+        else if (memcmp(id, "DST ", 4) == 0)
+        {
+            return -1;
+        }
+
+        if (chunk_size > (uint64_t)INT64_MAX)
+            return -1;
+        if (fseeko(f, data_start + (off_t)chunk_size, SEEK_SET) < 0)
+            return -1;
+        if (chunk_size & 1)
+            if (skip_fwd(f, 1) < 0)
+                return -1;
+    }
+
+    if (!got_prop || !got_data || info->channels == 0 || info->sample_rate == 0)
+        return -1;
+
+    return 0;
+}
+
+static inline int16_t dsd_float_to_s16(float v)
+{
+    float scaled = v * 32767.0f;
+    int32_t s = (int32_t)(scaled >= 0.0f ? (scaled + 0.5f) : (scaled - 0.5f));
+    if (s > 32767)
+        s = 32767;
+    else if (s < -32768)
+        s = -32768;
+    return (int16_t)s;
+}
 
 int cdrom_set_speed(const char *dev_path, int speed_x)
 {
@@ -463,6 +729,8 @@ audio_format_t detect_audio_format(const char *file_path)
         return AUDIO_FORMAT_WAV;
     if (strcasecmp(ext, ".mp3") == 0)
         return AUDIO_FORMAT_MP3;
+    if (strcasecmp(ext, ".dsf") == 0 || strcasecmp(ext, ".dff") == 0)
+        return AUDIO_FORMAT_DSD;
 
     return AUDIO_FORMAT_UNKNOWN;
 }
@@ -1138,6 +1406,256 @@ int play_mp3(const char *file_path, APP_CDIO *pCDIO)
     return last_rc;
 }
 
+int play_dsd(const char *file_path, APP_CDIO *pCDIO)
+{
+    FILE *f = fopen(file_path, "rb");
+    if (!f)
+    {
+        fprintf(stderr, "Failed to open DSD file: %s\n", file_path);
+        return AUDIO_ERROR;
+    }
+
+    unsigned char magic[4];
+    if (read_exact(f, magic, sizeof(magic)) < 0)
+    {
+        fclose(f);
+        return AUDIO_ERROR;
+    }
+    fseeko(f, 0, SEEK_SET);
+
+    dsd_info_t info;
+    memset(&info, 0, sizeof(info));
+    int parse_rc = -1;
+    if (memcmp(magic, "DSD ", 4) == 0)
+        parse_rc = parse_dsf(f, &info);
+    else if (memcmp(magic, "FRM8", 4) == 0)
+        parse_rc = parse_dff(f, &info);
+
+    if (parse_rc < 0 || info.channels == 0 || info.sample_rate == 0 || info.data_size == 0)
+    {
+        fprintf(stderr, "Unsupported or invalid DSD file: %s\n", file_path);
+        fclose(f);
+        return AUDIO_ERROR;
+    }
+    if (!info.interleaved && info.block_size == 0)
+    {
+        fprintf(stderr, "DSF block size missing: %s\n", file_path);
+        fclose(f);
+        return AUDIO_ERROR;
+    }
+
+    if (info.sample_rate % 8 != 0)
+    {
+        fprintf(stderr, "Unsupported DSD sample rate: %u\n", info.sample_rate);
+        fclose(f);
+        return AUDIO_ERROR;
+    }
+
+    unsigned int pcm_rate = info.sample_rate / 8;
+    printf("DSD: channels=%u, sample_rate=%u, pcm_rate=%u, data_size=%llu\n",
+           info.channels, info.sample_rate, pcm_rate, (unsigned long long)info.data_size);
+
+    if (reconfigure_alsa_rate(pCDIO->pcm_handle, pcm_rate, 16) < 0)
+    {
+        fprintf(stderr, "Failed to reconfigure ALSA for DSD\n");
+        fclose(f);
+        return AUDIO_ERROR;
+    }
+
+    uint64_t frames_from_size = info.data_size / info.channels;
+    uint64_t frames_from_samples = info.sample_count ? (info.sample_count / 8) : 0;
+    uint64_t total_frames = frames_from_size;
+    if (frames_from_samples > 0 && frames_from_samples < total_frames)
+        total_frames = frames_from_samples;
+    if (!info.interleaved && info.block_size > 0)
+        total_frames = (total_frames / info.block_size) * info.block_size;
+
+    pthread_mutex_lock(&pCDIO->lock);
+    pCDIO->total_lsn = (lsn_t)total_frames;
+    pCDIO->now_lsn = 0;
+    pthread_mutex_unlock(&pCDIO->lock);
+
+    int decode_channels = info.channels >= 2 ? 2 : 1;
+    dsd2pcm_ctx **ctx = (dsd2pcm_ctx **)calloc((size_t)decode_channels, sizeof(dsd2pcm_ctx *));
+    if (!ctx)
+    {
+        fclose(f);
+        return AUDIO_ERROR;
+    }
+    for (int i = 0; i < decode_channels; i++)
+    {
+        ctx[i] = dsd2pcm_init();
+        if (!ctx[i])
+        {
+            for (int j = 0; j < i; j++)
+                dsd2pcm_destroy(ctx[j]);
+            free(ctx);
+            fclose(f);
+            return AUDIO_ERROR;
+        }
+        dsd2pcm_reset(ctx[i]);
+    }
+
+    size_t block_frames = info.block_size ? info.block_size : DSD_BLOCK_FRAMES;
+    if (info.channels == 0 || block_frames > SIZE_MAX / info.channels)
+    {
+        for (int i = 0; i < decode_channels; i++)
+            dsd2pcm_destroy(ctx[i]);
+        free(ctx);
+        fclose(f);
+        return AUDIO_ERROR;
+    }
+    size_t block_bytes = block_frames * info.channels;
+    unsigned char *dsd_buf = (unsigned char *)malloc(block_bytes);
+    float *float_buf = (float *)malloc(block_frames * sizeof(float));
+    int16_t *pcm_buf = (int16_t *)malloc(block_frames * 2 * sizeof(int16_t));
+    if (!dsd_buf || !float_buf || !pcm_buf)
+    {
+        fprintf(stderr, "malloc failed for DSD buffers\n");
+        free(dsd_buf);
+        free(float_buf);
+        free(pcm_buf);
+        for (int i = 0; i < decode_channels; i++)
+            dsd2pcm_destroy(ctx[i]);
+        free(ctx);
+        fclose(f);
+        return AUDIO_ERROR;
+    }
+
+    if (fseeko(f, (off_t)info.data_offset, SEEK_SET) < 0)
+    {
+        fprintf(stderr, "seek failed for DSD data\n");
+        free(dsd_buf);
+        free(float_buf);
+        free(pcm_buf);
+        for (int i = 0; i < decode_channels; i++)
+            dsd2pcm_destroy(ctx[i]);
+        free(ctx);
+        fclose(f);
+        return AUDIO_ERROR;
+    }
+
+    int last_rc = AUDIO_OK;
+    if (total_frames > 0 && info.channels > 0 && total_frames > UINT64_MAX / info.channels)
+    {
+        free(dsd_buf);
+        free(float_buf);
+        free(pcm_buf);
+        for (int i = 0; i < decode_channels; i++)
+            dsd2pcm_destroy(ctx[i]);
+        free(ctx);
+        fclose(f);
+        return AUDIO_ERROR;
+    }
+    uint64_t bytes_remaining = total_frames * info.channels;
+
+    while (bytes_remaining > 0)
+    {
+        pthread_mutex_lock(&pCDIO->lock);
+        uint8_t next = pCDIO->next;
+        uint8_t prev = pCDIO->prev;
+        uint8_t ejct = pCDIO->ejct;
+        uint16_t manual_track = pCDIO->manual_track;
+        uint8_t stop_flag = pCDIO->stop;
+
+        pCDIO->next = 0;
+        pCDIO->prev = 0;
+        pthread_mutex_unlock(&pCDIO->lock);
+
+        if (next || prev || ejct || manual_track != 0)
+        {
+            if (manual_track > pCDIO->total_tracks || manual_track + 1 == pCDIO->now_tracks)
+            {
+                pCDIO->manual_track = 0;
+                continue;
+            }
+            last_rc = next ? AUDIO_NEXT : (prev ? AUDIO_PREV : (ejct ? AUDIO_EJECT : AUDIO_JUMP));
+            break;
+        }
+
+        if (stop_flag)
+        {
+            app_cdio_set_mute(true);
+            sleep(1);
+            continue;
+        }
+        else
+        {
+            app_cdio_set_mute(false);
+        }
+
+        size_t want = block_bytes;
+        if (bytes_remaining < want)
+            want = (size_t)bytes_remaining;
+
+        size_t got = fread(dsd_buf, 1, want, f);
+        if (got == 0)
+            break;
+        bytes_remaining -= got;
+
+        size_t bytes_per_channel = got / info.channels;
+        if (bytes_per_channel == 0)
+            break;
+
+        size_t frames = bytes_per_channel;
+        if (frames > block_frames)
+            frames = block_frames;
+
+        float vol_snapshot;
+        pthread_mutex_lock(&pCDIO->lock);
+        vol_snapshot = pCDIO->volume;
+        pthread_mutex_unlock(&pCDIO->lock);
+
+        const unsigned char *src0 = info.interleaved ? (dsd_buf + 0) : (dsd_buf + 0 * bytes_per_channel);
+        ptrdiff_t stride0 = info.interleaved ? (ptrdiff_t)info.channels : 1;
+        dsd2pcm_translate(ctx[0], frames, src0, stride0, info.lsbitfirst, float_buf, 1);
+        for (size_t s = 0; s < frames; s++)
+        {
+            int16_t smp = dsd_float_to_s16(float_buf[s] * vol_snapshot);
+            pcm_buf[s * 2] = smp;
+            if (decode_channels == 1)
+                pcm_buf[s * 2 + 1] = smp;
+        }
+
+        if (decode_channels == 2)
+        {
+            const unsigned char *src1 = info.interleaved ? (dsd_buf + 1) : (dsd_buf + 1 * bytes_per_channel);
+            ptrdiff_t stride1 = info.interleaved ? (ptrdiff_t)info.channels : 1;
+            dsd2pcm_translate(ctx[1], frames, src1, stride1, info.lsbitfirst, float_buf, 1);
+            for (size_t s = 0; s < frames; s++)
+            {
+                int16_t smp = dsd_float_to_s16(float_buf[s] * vol_snapshot);
+                pcm_buf[s * 2 + 1] = smp;
+            }
+        }
+
+        int frames_written = write_audio_to_alsa(pCDIO->pcm_handle, pcm_buf, frames, 2, pCDIO);
+        if (frames_written < 0)
+        {
+            fprintf(stderr, "ALSA write error: %d\n", frames_written);
+        }
+    }
+
+    free(dsd_buf);
+    free(float_buf);
+    free(pcm_buf);
+    for (int i = 0; i < decode_channels; i++)
+        dsd2pcm_destroy(ctx[i]);
+    free(ctx);
+    fclose(f);
+
+    int st = snd_pcm_state(pCDIO->pcm_handle);
+    if (st == SND_PCM_STATE_RUNNING || st == SND_PCM_STATE_XRUN ||
+        st == SND_PCM_STATE_SUSPENDED || st == SND_PCM_STATE_DISCONNECTED)
+    {
+        printf("Draining playback\n");
+        snd_pcm_drain(pCDIO->pcm_handle);
+        snd_pcm_prepare(pCDIO->pcm_handle);
+    }
+
+    return last_rc;
+}
+
 int play_audio(const char *file_path, APP_CDIO *pCDIO)
 {
     if (!file_path)
@@ -1163,6 +1681,8 @@ int play_audio(const char *file_path, APP_CDIO *pCDIO)
             return play_wav(file_path, pCDIO);
         case AUDIO_FORMAT_MP3:
             return play_mp3(file_path, pCDIO);
+        case AUDIO_FORMAT_DSD:
+            return play_dsd(file_path, pCDIO);
         default:
             fprintf(stderr, "unsupported audio format: %s\n", file_path);
             return AUDIO_ERROR;

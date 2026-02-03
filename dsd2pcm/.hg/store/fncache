@@ -1,0 +1,10 @@
+data/info.txt.i
+data/noiseshape.hpp.i
+data/noiseshape.h.i
+data/main.cpp.i
+data/noiseshape.c.i
+data/dsd2pcm.c.i
+data/LICENSE.txt.i
+data/.hgignore.i
+data/dsd2pcm.hpp.i
+data/dsd2pcm.h.i
