@@ -14,6 +14,7 @@
 #include <signal.h>
 #include <arpa/inet.h>
 #include <string.h>
+#include <u8g2/u8g2.h>
 #include "led.h"
 #include "app_button.h"
 #include "app_cdplayer.h"
@@ -201,7 +202,7 @@ void *button_handl_entry(void *arg)
         {
         case KEY_EVENT_CLICK:
             printf("Left Click detected\n");
-            app_cdio_adjust_volume(-0.05f);
+            app_cdio_adjust_volume(-0.02f);
             break;
         case KEY_EVENT_DOUBLE:
             app_cdio_set_prev();
@@ -237,7 +238,7 @@ void *button_handl_entry(void *arg)
         {
         case KEY_EVENT_CLICK:
             printf("Right Click detected\n");
-            app_cdio_adjust_volume(0.05f);
+            app_cdio_adjust_volume(0.02f);
             break;
         case KEY_EVENT_DOUBLE:
             app_cdio_set_next();
@@ -421,11 +422,11 @@ void *button_ir_entry(void *arg)
                     printf("IR: next\n");
                     break;
                 case KEY_VOLUMEDOWN: // vol-
-                    app_cdio_adjust_volume(-0.05f);
+                    app_cdio_adjust_volume(-0.02f);
                     printf("IR: vol-\n");
                     break;
                 case KEY_VOLUMEUP: // vol+
-                    app_cdio_adjust_volume(0.05f);
+                    app_cdio_adjust_volume(0.02f);
                     printf("IR: vol+\n");
                     break;
                 case KEY_NUMERIC_0: // 1

@@ -88,8 +88,8 @@ void u8g2_cdplayer(void)
     uint8_t cdda_ready_flag, eject_flag;
     lsn_t now_lsn;
     lsn_t total_lsn;
-    track_t now_tracks;
-    track_t total_tracks;
+    uint16_t now_tracks;
+    uint16_t total_tracks;
     float volume;
     uint8_t stop_flag, next_flag, prev_flag;
     uint16_t album_entries;
@@ -147,8 +147,8 @@ void u8g2_cdplayer(void)
         u8g2_DrawXBM(&u8g2, 0, 0, 64, 64, bmp);
 
         u8g2_SetFont(&u8g2, u8g2_font_spleen8x16_mf);
-        u8g2_DrawStr(&u8g2, 76, 35, "Disc");
-        u8g2_DrawStr(&u8g2, 76, 50, "Eject");
+        u8g2_DrawStr(&u8g2, 78, 35, "Disc");
+        u8g2_DrawStr(&u8g2, 78, 50, "Eject");
     }
     else if (cdda_ready_flag)
     {
@@ -226,8 +226,8 @@ void u8g2_cdplayer(void)
         u8g2_DrawXBM(&u8g2, 0, 0, 64, 64, bmp);
 
         u8g2_SetFont(&u8g2, u8g2_font_spleen8x16_mf);
-        u8g2_DrawStr(&u8g2, 76, 35, "No");
-        u8g2_DrawStr(&u8g2, 76, 50, "Disc");
+        u8g2_DrawStr(&u8g2, 78, 35, "No");
+        u8g2_DrawStr(&u8g2, 78, 50, "Disc");
 
         if (stat)
         {
