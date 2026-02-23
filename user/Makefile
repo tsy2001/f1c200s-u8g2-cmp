@@ -31,6 +31,7 @@ LOCAL_SRCS := \
   u8g2_hw_i2c.c \
   dvdplayer.c \
   dr_libs_impl.c \
+  app_usb.c \
   app_button.c \
   app_u8g2.c \
   app_cdplayer.c
@@ -69,4 +70,4 @@ clean:
 	@echo RM -rf $(OBJDIR)/
 	@rm -rf $(OBJDIR)
 	@echo RM -rf $(OUTDIR)/
-	@rm -rf $(OUTDIR)
+	@rm $(OUTDIR)/$(TARGET)

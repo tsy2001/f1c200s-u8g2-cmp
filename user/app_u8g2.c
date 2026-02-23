@@ -93,6 +93,7 @@ void u8g2_cdplayer(void)
     float volume;
     uint8_t stop_flag, next_flag, prev_flag;
     uint16_t album_entries;
+    uint8_t usb_pc_mode;
     char artist_buf[ONE_ALBUM_LENGTH];
     char title_buf[ONE_ALBUM_LENGTH];
     char file_buf[ONE_ALBUM_LENGTH];
@@ -109,6 +110,7 @@ void u8g2_cdplayer(void)
     stop_flag = app_cdio.stop;
     next_flag = app_cdio.next;
     prev_flag = app_cdio.prev;
+    usb_pc_mode = app_cdio.usb_pc_mode;
     album_entries = app_cdio.album_entries;
     // 搬运专辑信息到临时缓区
     artist_buf[0] = '\0';
@@ -226,10 +228,18 @@ void u8g2_cdplayer(void)
         u8g2_DrawXBM(&u8g2, 0, 0, 64, 64, bmp);
 
         u8g2_SetFont(&u8g2, u8g2_font_spleen8x16_mf);
-        u8g2_DrawStr(&u8g2, 78, 35, "No");
-        u8g2_DrawStr(&u8g2, 78, 50, "Disc");
+        if (usb_pc_mode)
+        {
+            u8g2_DrawStr(&u8g2, 78, 35, "PC");
+            u8g2_DrawStr(&u8g2, 78, 50, "Mode");
+        }
+        else
+        {
+            u8g2_DrawStr(&u8g2, 78, 35, "No");
+            u8g2_DrawStr(&u8g2, 78, 50, "Disc");
+        }
 
-        if (stat)
+        if (stat && !usb_pc_mode)
         {
             u8g2_SetFont(&u8g2, u8g2_font_open_iconic_all_2x_t);
             u8g2_DrawGlyph(&u8g2, 107, 21, 197);

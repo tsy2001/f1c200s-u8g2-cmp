@@ -3,6 +3,8 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include <sys/types.h>
 #include <cdio/cdio.h>
 #include <cdio/mmc.h>
 #include <alsa/asoundlib.h>
@@ -42,6 +44,9 @@ typedef struct {
     
     uint8_t eject_in_progress; /* internal: set while eject handling waits for in-flight ops to finish */
     int cdio_refcount; /* number of threads currently using cdio */
+
+    uint8_t usb_pc_mode; /* 1: USB peripheral serial shell mode, 0: normal host mode */
+    pid_t usb_shell_pid; /* child shell pid bound to /dev/ttyGS0 */
 } APP_CDIO;
 
 void *cd_player_thread_entry(void *);
@@ -57,6 +62,8 @@ void app_cdio_set_eject(void);
 void app_cdio_toggle_stop(void);
 void app_cdio_adjust_volume(float delta);
 void app_cdio_set_mute(bool mute);
+/* Toggle USB host/peripheral serial-shell mode when UI is at "No Disc". Returns 0 on toggle success. */
+int app_cdio_toggle_usb_pc_mode(void);
 /* cdio usage reference counting (thread-safe) */
 CdIo *app_cdio_acquire_cdio(void);
 void app_cdio_release_cdio(void);

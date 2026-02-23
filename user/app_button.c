@@ -223,7 +223,15 @@ void *button_handl_entry(void *arg)
             printf("Mid Click detected\n");
             break;
         case KEY_EVENT_DOUBLE:
-            printf("Mid Double click detected\n");
+        {
+            int rc = app_cdio_toggle_usb_pc_mode();
+            if (rc == 0)
+                printf("Mid Double click detected, USB mode toggled\n");
+            else if (rc == 1)
+                printf("Mid Double click ignored: not in No Disc state\n");
+            else
+                printf("Mid Double click detected, USB mode toggle failed\n");
+        }
             break;
         case KEY_EVENT_LONG_PRESS:
             app_cdio_set_eject();
