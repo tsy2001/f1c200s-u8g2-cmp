@@ -11,18 +11,17 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
-#include "led.h"
 #include "app_cdplayer.h"
 #include "app_usb.h"
+#include "cmp_module_ctl.h"
 
 // 光驱设备
 #define OPTICAL_DEVICE "/dev/sr0"
 // 声卡设备
 #define PCM_DEVICE "default"
-// SD卡设备
-#define SDMMC_DEVICE "/dev/mmcblk0p1"
+// SD卡自动挂载目录
+#define SDMMC_MOUNT_POINT "/mnt/sdcard"
 
-led_t *mute_handle = NULL;
 pthread_t cd_thread;
 pthread_attr_t cd_thread_attr;
 APP_CDIO app_cdio;
@@ -30,8 +29,46 @@ APP_CDIO app_cdio;
 // 从dvdplayer.c引用的函数声明
 int cdrom_set_speed(const char *dev_path, int speed_x);
 int play_dvd(const char *cd_dev, APP_CDIO *pCDIO);
-int play_sdmmc(const char *dev, APP_CDIO *pCDIO);
+int play_sdmmc(const char *mount_point, APP_CDIO *pCDIO);
 int reconfigure_alsa_rate(snd_pcm_t *pcm_handle, unsigned int sample_rate, uint8_t format);
+
+static void app_cdio_reset_playback_state_locked(void)
+{
+    app_cdio.cdda_ready_flag = 0;
+    app_cdio.album_ready_flag = 0;
+    app_cdio.now_title[0] = '\0';
+    app_cdio.total_lsn = 0;
+    app_cdio.now_lsn = 0;
+    app_cdio.now_tracks = 0;
+    app_cdio.total_tracks = 0;
+    app_cdio.next = 0;
+    app_cdio.prev = 0;
+    app_cdio.stop = 0;
+    app_cdio.ejct = 0;
+    app_cdio.eject_in_progress = 0;
+    app_cdio.manual_track = 0;
+}
+
+static void app_cdio_switch_to_menu_locked(void)
+{
+    app_cdio.app_mode = APP_MODE_MENU;
+    app_cdio.return_to_menu = 0;
+    app_cdio.usb_pc_mode = 0;
+    app_cdio_reset_playback_state_locked();
+}
+
+static uint8_t app_cdio_take_return_to_menu(void)
+{
+    uint8_t ret;
+
+    pthread_mutex_lock(&app_cdio.lock);
+    ret = app_cdio.return_to_menu;
+    if (ret)
+        app_cdio_switch_to_menu_locked();
+    pthread_mutex_unlock(&app_cdio.lock);
+
+    return ret;
+}
 
 static void sleep_ms_local(unsigned int ms)
 {
@@ -67,19 +104,40 @@ static void app_cdio_close_pcm_if_open(void)
     }
 }
 
-int check_sdmmc_device(const char *dev)
+int check_sdmmc_mount(const char *mount_point)
 {
-    struct stat st;
-    if (stat(dev, &st) == 0 && S_ISBLK(st.st_mode)) 
+    FILE *fp = fopen("/proc/mounts", "r");
+    if (!fp)
     {
-        printf("sdmmc exists and is block device\n");
-        return 0;
-    } 
-    else 
-    {
-        printf("sdmmc not present\n");
+        printf("failed to open /proc/mounts: %s\n", strerror(errno));
+        return -1;
     }
-    return -1;
+
+    char dev[128];
+    char target[256];
+    char fstype[64];
+    char opts[256];
+    int dump;
+    int pass;
+    int found = -1;
+
+    while (fscanf(fp, "%127s %255s %63s %255s %d %d",
+                  dev, target, fstype, opts, &dump, &pass) == 6)
+    {
+        if (strcmp(target, mount_point) == 0)
+        {
+            printf("sdmmc mounted: %s on %s type %s\n", dev, target, fstype);
+            found = 0;
+            break;
+        }
+    }
+
+    fclose(fp);
+
+    if (found != 0)
+        printf("sdmmc mount point not mounted\n");
+
+    return found;
 }
 
 void apply_volume(void *buffer, size_t bytes, float *volume)
@@ -525,21 +583,63 @@ void *cd_player_thread_entry(void *arg)
 
     while (1)
     {
+        APP_MODE mode_now;
         uint8_t usb_pc_mode_now;
         pthread_mutex_lock(&app_cdio.lock);
-        app_cdio.cdda_ready_flag = 0;
+        mode_now = app_cdio.app_mode;
         usb_pc_mode_now = app_cdio.usb_pc_mode;
-        if (usb_pc_mode_now)
+        if (mode_now == APP_MODE_MENU || mode_now == APP_MODE_PC)
         {
-            app_cdio.album_ready_flag = 0;
-            app_cdio.now_title[0] = '\0';
+            clear_album_info_handle(&app_cdio);
+            app_cdio_reset_playback_state_locked();
         }
         pthread_mutex_unlock(&app_cdio.lock);
 
-        if (usb_pc_mode_now)
+        if (mode_now == APP_MODE_MENU)
         {
             app_cdio_close_pcm_if_open();
             app_cdio_set_mute(false);
+            if (usb_pc_mode_now)
+            {
+                pid_t shell_pid = app_cdio.usb_shell_pid;
+                if (app_usb_exit_pc_mode(&shell_pid) == 0)
+                {
+                    pthread_mutex_lock(&app_cdio.lock);
+                    app_cdio.usb_shell_pid = shell_pid;
+                    app_cdio.usb_pc_mode = 0;
+                    pthread_mutex_unlock(&app_cdio.lock);
+                }
+            }
+            sleep_ms_local(100);
+            continue;
+        }
+
+        if (mode_now == APP_MODE_PC)
+        {
+            pid_t shell_pid;
+            app_cdio_close_pcm_if_open();
+            app_cdio_set_mute(false);
+
+            pthread_mutex_lock(&app_cdio.lock);
+            shell_pid = app_cdio.usb_shell_pid;
+            pthread_mutex_unlock(&app_cdio.lock);
+
+            if (!usb_pc_mode_now)
+            {
+                if (app_usb_enter_pc_mode(&shell_pid) == 0)
+                {
+                    pthread_mutex_lock(&app_cdio.lock);
+                    app_cdio.usb_pc_mode = 1;
+                    app_cdio.usb_shell_pid = shell_pid;
+                    pthread_mutex_unlock(&app_cdio.lock);
+                }
+                else
+                {
+                    pthread_mutex_lock(&app_cdio.lock);
+                    app_cdio_switch_to_menu_locked();
+                    pthread_mutex_unlock(&app_cdio.lock);
+                }
+            }
             sleep(1);
             continue;
         }
@@ -550,31 +650,45 @@ void *cd_player_thread_entry(void *arg)
             continue;
         }
 
-        sdmmc_present = (check_sdmmc_device(SDMMC_DEVICE) == 0);
-        if (sdmmc_present)
-        {
-            uint8_t eject_flag = 0;
-            printf("SDMMC device detected, playing SDMMC audio\n");
-            pthread_mutex_lock(&app_cdio.lock);
-            app_cdio.cdio = NULL;
-            eject_flag = app_cdio.ejct;
-            if (app_cdio.ejct) app_cdio.eject_in_progress = 1;
-            clear_album_info_handle(&app_cdio);
-            app_cdio.album_ready_flag = 0;
-            app_cdio.now_title[0] = '\0';
-            pthread_mutex_unlock(&app_cdio.lock);
-            if(eject_flag) {sleep(2); continue;}
-            play_sdmmc(SDMMC_DEVICE, &app_cdio);
-            sleep(2);
+        if (app_cdio_take_return_to_menu())
             continue;
-        } else {
+
+        if (mode_now == APP_MODE_SD)
+        {
+            sdmmc_present = (check_sdmmc_mount(SDMMC_MOUNT_POINT) == 0);
+            if (sdmmc_present)
+            {
+                uint8_t eject_flag = 0;
+                printf("SDMMC mounted, playing SDMMC audio\n");
+                pthread_mutex_lock(&app_cdio.lock);
+                app_cdio.cdio = NULL;
+                eject_flag = app_cdio.ejct;
+                if (app_cdio.ejct) app_cdio.eject_in_progress = 1;
+                clear_album_info_handle(&app_cdio);
+                app_cdio.album_ready_flag = 0;
+                app_cdio.now_title[0] = '\0';
+                pthread_mutex_unlock(&app_cdio.lock);
+                if(eject_flag) {sleep(2); continue;}
+                play_sdmmc(SDMMC_MOUNT_POINT, &app_cdio);
+                if (app_cdio_take_return_to_menu())
+                    continue;
+                sleep(2);
+                continue;
+            }
+
             pthread_mutex_lock(&app_cdio.lock);
             if (app_cdio.ejct || app_cdio.eject_in_progress) {
-                app_cdio.album_ready_flag = 0;
-                app_cdio.ejct = 0;
-                app_cdio.eject_in_progress = 0;
+                if (app_cdio.return_to_menu)
+                    app_cdio_switch_to_menu_locked();
+                else {
+                    app_cdio.album_ready_flag = 0;
+                    app_cdio.ejct = 0;
+                    app_cdio.eject_in_progress = 0;
+                }
             }
             pthread_mutex_unlock(&app_cdio.lock);
+            sleep(1);
+            continue;
         }
 
         CdIo *cd = cdio_open(OPTICAL_DEVICE, DRIVER_DEVICE);
@@ -676,6 +790,9 @@ void *cd_player_thread_entry(void *arg)
             printf("Ejecting media (cd=%p)\n", (void *)cd);
             cdio_eject_media_drive(OPTICAL_DEVICE);
             printf("Eject complete\n");
+
+            if (app_cdio_take_return_to_menu())
+                continue;
         }
         else if(app_cdio.disc_mode == CDIO_DISC_MODE_CD_DA)
         {   // 如果是CD—DA光碟，走到这一部也没有弹出请求，那么说明音轨读取错误，关闭cdio从头再来一遍
@@ -714,21 +831,16 @@ void app_cdplayer_start(void)
     pthread_mutex_lock(&app_cdio.lock);
     app_cdio.usb_pc_mode = 0;
     app_cdio.usb_shell_pid = 0;
+    app_cdio.app_mode = APP_MODE_MENU;
+    app_cdio.menu_index = APP_MENU_DISC;
+    app_cdio.return_to_menu = 0;
+    app_cdio.volume = 0.2f;
     pthread_mutex_unlock(&app_cdio.lock);
 
-    mute_handle = led_new();
-    if (mute_handle == NULL)
-    {
-        printf("Failed to create mute handle\n");
-        return;
-    }
-
-    err = led_open(mute_handle, "mute");
+    err = cmp_module_open();
     if (err != 0)
     {
-        printf("Failed to open LED device\n");
-        led_free(mute_handle);
-        mute_handle = NULL;
+        printf("Failed to open cmp-module device: %s\n", strerror(errno));
         return;
     }
 
@@ -747,8 +859,8 @@ void app_cdplayer_start(void)
 
 void app_cdplayer_wait(void)
 {
-    led_free(mute_handle);
     pthread_join(cd_thread, NULL);
+    cmp_module_close();
 }
 
 // 线程同步 线程安全操作
@@ -782,71 +894,6 @@ void app_cdio_set_eject(void)
     app_cdio.ejct = 1;
     pthread_cond_broadcast(&app_cdio.cond);
     pthread_mutex_unlock(&app_cdio.lock);
-}
-
-int app_cdio_toggle_usb_pc_mode(void)
-{
-    int rc;
-    uint8_t target_pc_mode;
-    pid_t shell_pid;
-
-    pthread_mutex_lock(&app_cdio.lock);
-    if (app_cdio.usb_pc_mode)
-    {
-        target_pc_mode = 0;
-    }
-    else if (!app_cdio.cdda_ready_flag && !app_cdio.eject_in_progress)
-    {
-        target_pc_mode = 1;
-    }
-    else
-    {
-        pthread_mutex_unlock(&app_cdio.lock);
-        printf("usb pc mode toggle ignored: UI is not in No Disc state\n");
-        return 1;
-    }
-
-    shell_pid = app_cdio.usb_shell_pid;
-    if (target_pc_mode)
-        app_cdio.usb_pc_mode = 1;
-    pthread_mutex_unlock(&app_cdio.lock);
-
-    if (target_pc_mode)
-    {
-        for (int i = 0; i < 20; i++)
-        {
-            int pcm_closed = 0;
-            pthread_mutex_lock(&app_cdio.lock);
-            pcm_closed = (app_cdio.pcm_handle == NULL);
-            pthread_mutex_unlock(&app_cdio.lock);
-            if (pcm_closed)
-                break;
-            sleep_ms_local(50);
-        }
-        rc = app_usb_enter_pc_mode(&shell_pid);
-    }
-    else
-        rc = app_usb_exit_pc_mode(&shell_pid);
-
-    if (rc < 0)
-    {
-        if (target_pc_mode)
-        {
-            pthread_mutex_lock(&app_cdio.lock);
-            app_cdio.usb_pc_mode = 0;
-            pthread_mutex_unlock(&app_cdio.lock);
-        }
-        return -1;
-    }
-
-    pthread_mutex_lock(&app_cdio.lock);
-    app_cdio.usb_pc_mode = target_pc_mode;
-    app_cdio.usb_shell_pid = shell_pid;
-    pthread_mutex_unlock(&app_cdio.lock);
-
-    if (target_pc_mode)
-        app_cdio_set_mute(false);
-    return 0;
 }
 
 CdIo *app_cdio_acquire_cdio(void)
@@ -891,17 +938,109 @@ void app_cdio_adjust_volume(float delta)
     pthread_mutex_unlock(&app_cdio.lock);
 }
 
-void app_cdio_set_mute(bool mute)
+void app_cdio_menu_prev(void)
 {
-    if (mute_handle == NULL)
-        return;
-
-    if (mute)
+    pthread_mutex_lock(&app_cdio.lock);
+    if (app_cdio.app_mode == APP_MODE_MENU)
     {
-        led_write(mute_handle, 0);
+        if (app_cdio.menu_index == 0)
+            app_cdio.menu_index = APP_MENU_COUNT - 1;
+        else
+            app_cdio.menu_index--;
+    }
+    pthread_mutex_unlock(&app_cdio.lock);
+}
+
+void app_cdio_menu_next(void)
+{
+    pthread_mutex_lock(&app_cdio.lock);
+    if (app_cdio.app_mode == APP_MODE_MENU)
+        app_cdio.menu_index = (app_cdio.menu_index + 1) % APP_MENU_COUNT;
+    pthread_mutex_unlock(&app_cdio.lock);
+}
+
+void app_cdio_menu_confirm(void)
+{
+    pthread_mutex_lock(&app_cdio.lock);
+    if (app_cdio.app_mode == APP_MODE_MENU)
+    {
+        clear_album_info_handle(&app_cdio);
+        app_cdio_reset_playback_state_locked();
+        switch (app_cdio.menu_index)
+        {
+        case APP_MENU_DISC:
+            app_cdio.app_mode = APP_MODE_DISC;
+            break;
+        case APP_MENU_SD:
+            app_cdio.app_mode = APP_MODE_SD;
+            break;
+        case APP_MENU_PC:
+            app_cdio.app_mode = APP_MODE_PC;
+            break;
+        default:
+            app_cdio.app_mode = APP_MODE_MENU;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&app_cdio.lock);
+}
+
+void app_cdio_return_to_menu(void)
+{
+    pid_t shell_pid = 0;
+    uint8_t exit_usb_now = 0;
+
+    pthread_mutex_lock(&app_cdio.lock);
+    if (app_cdio.app_mode == APP_MODE_PC)
+    {
+        shell_pid = app_cdio.usb_shell_pid;
+        exit_usb_now = app_cdio.usb_pc_mode;
+        app_cdio_switch_to_menu_locked();
+    }
+    else if (!app_cdio.cdda_ready_flag && app_cdio.cdio == NULL)
+    {
+        app_cdio_switch_to_menu_locked();
     }
     else
     {
-        led_write(mute_handle, 1);
+        app_cdio.return_to_menu = 1;
+        app_cdio.ejct = 1;
+        app_cdio.eject_in_progress = 1;
+        pthread_cond_broadcast(&app_cdio.cond);
+    }
+    pthread_mutex_unlock(&app_cdio.lock);
+
+    if (exit_usb_now)
+    {
+        (void)app_usb_exit_pc_mode(&shell_pid);
+        pthread_mutex_lock(&app_cdio.lock);
+        app_cdio.usb_shell_pid = shell_pid;
+        app_cdio.usb_pc_mode = 0;
+        pthread_mutex_unlock(&app_cdio.lock);
+    }
+}
+
+APP_MODE app_cdio_get_mode(void)
+{
+    APP_MODE mode;
+
+    pthread_mutex_lock(&app_cdio.lock);
+    mode = app_cdio.app_mode;
+    pthread_mutex_unlock(&app_cdio.lock);
+
+    return mode;
+}
+
+void app_cdio_set_mute(bool mute)
+{
+    if (mute)
+    {
+        if (cmp_module_set_codec_mute(false) < 0)
+            printf("Failed to set codec mute low: %s\n", strerror(errno));
+    }
+    else
+    {
+        if (cmp_module_set_codec_mute(true) < 0)
+            printf("Failed to set codec mute high: %s\n", strerror(errno));
     }
 }

@@ -20,7 +20,7 @@
 #include <dr_mp3.h>
 #include <app_cdplayer.h>
 
-#define MOUNT_POINT "/mnt"
+#define MOUNT_POINT "/mnt/dvd"
 
 // 可解码的音频文件格式
 typedef enum {
@@ -84,7 +84,6 @@ static inline void to_stereo_s32(const int32_t *in, uint64_t frames, unsigned in
 
 // 函数声明
 int mount_dvd(const char *dev);
-int mount_sdmmc(const char *dev);
 void scan_and_play_audio(const char *path, APP_CDIO *pCDIO);
 int play_audio(const char *file_path, APP_CDIO *pCDIO);
 audio_format_t detect_audio_format(const char *file_path);
@@ -129,18 +128,16 @@ int play_dvd(const char *cd_dev, APP_CDIO *pCDIO)
     return 0;
 }
 
-int play_sdmmc(const char *dev, APP_CDIO *pCDIO)
+int play_sdmmc(const char *mount_point, APP_CDIO *pCDIO)
 {
-    if (mount_sdmmc(dev) != 0)
+    if (access(mount_point, R_OK | X_OK) != 0)
     {
-        fprintf(stderr, "Failed to mount SDMMC from %s.\n", dev);
+        fprintf(stderr, "SDMMC mount point is not accessible: %s.\n", mount_point);
         return 1;
     }
 
-    printf("Scanning and playing audio files from %s\n", MOUNT_POINT);
-    scan_and_play_audio(MOUNT_POINT, pCDIO);
-
-    umount(MOUNT_POINT);
+    printf("Scanning and playing audio files from %s\n", mount_point);
+    scan_and_play_audio(mount_point, pCDIO);
     return 0;
 }
 
@@ -357,24 +354,6 @@ int mount_dvd(const char *dev)
         printf("Failed to mount DVD by: %s\n", fstypes[i]);
     }
 
-    return -1;
-}
-
-int mount_sdmmc(const char *dev)
-{
-    if (access(MOUNT_POINT, F_OK) != 0)
-    {
-        if (mkdir(MOUNT_POINT, 0755) != 0) // 如果没有挂载点就创建
-        {
-            perror("Failed to create mount point");
-            return -1;
-        }
-    }
-
-    if (mount(dev, MOUNT_POINT, "vfat", MS_RDONLY, NULL) == 0)
-        return 0;
-
-    printf("Failed to mount SDMMC device\n");
     return -1;
 }
 

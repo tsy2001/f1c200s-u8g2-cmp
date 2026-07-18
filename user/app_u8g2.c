@@ -13,7 +13,7 @@
 #include "app_cdplayer.h"
 #include "logo.h"
 
-#define I2C_BUS 1
+#define I2C_BUS 2
 
 u8g2_t u8g2;
 pthread_t ui_thread;
@@ -94,6 +94,8 @@ void u8g2_cdplayer(void)
     uint8_t stop_flag, next_flag, prev_flag;
     uint16_t album_entries;
     uint8_t usb_pc_mode;
+    APP_MODE app_mode;
+    APP_MENU_ITEM menu_index;
     char artist_buf[ONE_ALBUM_LENGTH];
     char title_buf[ONE_ALBUM_LENGTH];
     char file_buf[ONE_ALBUM_LENGTH];
@@ -111,6 +113,8 @@ void u8g2_cdplayer(void)
     next_flag = app_cdio.next;
     prev_flag = app_cdio.prev;
     usb_pc_mode = app_cdio.usb_pc_mode;
+    app_mode = app_cdio.app_mode;
+    menu_index = app_cdio.menu_index;
     album_entries = app_cdio.album_entries;
     // 搬运专辑信息到临时缓区
     artist_buf[0] = '\0';
@@ -144,7 +148,21 @@ void u8g2_cdplayer(void)
     }
     pthread_mutex_unlock(&app_cdio.lock);
 
-    if (eject_flag) 
+    if (app_mode == APP_MODE_MENU)
+    {
+        const char *items[APP_MENU_COUNT] = {"Disc", "SD", "PC"};
+
+        u8g2_DrawXBM(&u8g2, 0, 0, 64, 64, bmp);
+        u8g2_SetFont(&u8g2, u8g2_font_spleen8x16_mf);
+        for (int i = 0; i < APP_MENU_COUNT; i++)
+        {
+            int y = 18 + i * 18;
+            if ((APP_MENU_ITEM)i == menu_index)
+                u8g2_DrawStr(&u8g2, 72, y, ">");
+            u8g2_DrawStr(&u8g2, 88, y, items[i]);
+        }
+    }
+    else if (eject_flag) 
     {
         u8g2_DrawXBM(&u8g2, 0, 0, 64, 64, bmp);
 

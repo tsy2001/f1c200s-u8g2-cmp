@@ -196,16 +196,21 @@ void *button_handl_entry(void *arg)
         KeyDetector_Update(&key[2], tick_now);
 
         KeyEvent event[3];
+        APP_MODE mode_now = app_cdio_get_mode();
 
         event[0] = KeyDetector_GetEvent(&key[0]);
         switch (event[0])
         {
         case KEY_EVENT_CLICK:
             printf("Left Click detected\n");
-            app_cdio_adjust_volume(-0.02f);
+            if (mode_now == APP_MODE_MENU)
+                app_cdio_menu_prev();
+            else if (mode_now != APP_MODE_PC)
+                app_cdio_adjust_volume(-0.02f);
             break;
         case KEY_EVENT_DOUBLE:
-            app_cdio_set_prev();
+            if (mode_now != APP_MODE_MENU && mode_now != APP_MODE_PC)
+                app_cdio_set_prev();
             printf("Left Double click detected\n");
             break;
         case KEY_EVENT_LONG_PRESS:
@@ -219,22 +224,20 @@ void *button_handl_entry(void *arg)
         switch (event[1])
         {
         case KEY_EVENT_CLICK:
-            app_cdio_toggle_stop();
+            if (mode_now == APP_MODE_MENU)
+                app_cdio_menu_confirm();
+            else if (mode_now != APP_MODE_PC)
+                app_cdio_toggle_stop();
             printf("Mid Click detected\n");
             break;
         case KEY_EVENT_DOUBLE:
-        {
-            int rc = app_cdio_toggle_usb_pc_mode();
-            if (rc == 0)
-                printf("Mid Double click detected, USB mode toggled\n");
-            else if (rc == 1)
-                printf("Mid Double click ignored: not in No Disc state\n");
-            else
-                printf("Mid Double click detected, USB mode toggle failed\n");
-        }
+            if (mode_now != APP_MODE_MENU && mode_now != APP_MODE_PC)
+                app_cdio_set_eject();
+            printf("Mid Double click detected\n");
             break;
         case KEY_EVENT_LONG_PRESS:
-            app_cdio_set_eject();
+            if (mode_now != APP_MODE_MENU)
+                app_cdio_return_to_menu();
             printf("Mid Long press detected\n");
             break;
         default:
@@ -246,10 +249,14 @@ void *button_handl_entry(void *arg)
         {
         case KEY_EVENT_CLICK:
             printf("Right Click detected\n");
-            app_cdio_adjust_volume(0.02f);
+            if (mode_now == APP_MODE_MENU)
+                app_cdio_menu_next();
+            else if (mode_now != APP_MODE_PC)
+                app_cdio_adjust_volume(0.02f);
             break;
         case KEY_EVENT_DOUBLE:
-            app_cdio_set_next();
+            if (mode_now != APP_MODE_MENU && mode_now != APP_MODE_PC)
+                app_cdio_set_next();
             printf("Right Double click detected\n");
             break;
         case KEY_EVENT_LONG_PRESS:
@@ -411,30 +418,45 @@ void *button_ir_entry(void *arg)
                 }
                 last_code = code;
                 last_time = now;
+                APP_MODE mode_now = app_cdio_get_mode();
                 switch (code)
                 {
                 case KEY_PAUSE: // pause
-                    app_cdio_toggle_stop();
+                    if (mode_now == APP_MODE_MENU)
+                        app_cdio_menu_confirm();
+                    else if (mode_now != APP_MODE_PC)
+                        app_cdio_toggle_stop();
                     printf("IR: pause\n");
                     break;
                 case KEY_EJECTCD: // eject
-                    app_cdio_set_eject();
+                    if (mode_now == APP_MODE_MENU)
+                        app_cdio_return_to_menu();
+                    else
+                        app_cdio_set_eject();
                     printf("IR: eject\n");
                     break;
                 case KEY_PREVIOUS: // prev
-                    app_cdio_set_prev();
+                    if (mode_now == APP_MODE_MENU)
+                        app_cdio_menu_prev();
+                    else if (mode_now != APP_MODE_PC)
+                        app_cdio_set_prev();
                     printf("IR: prev\n");
                     break;
                 case KEY_NEXT: // next
-                    app_cdio_set_next();
+                    if (mode_now == APP_MODE_MENU)
+                        app_cdio_menu_next();
+                    else if (mode_now != APP_MODE_PC)
+                        app_cdio_set_next();
                     printf("IR: next\n");
                     break;
                 case KEY_VOLUMEDOWN: // vol-
-                    app_cdio_adjust_volume(-0.02f);
+                    if (mode_now != APP_MODE_PC)
+                        app_cdio_adjust_volume(-0.02f);
                     printf("IR: vol-\n");
                     break;
                 case KEY_VOLUMEUP: // vol+
-                    app_cdio_adjust_volume(0.02f);
+                    if (mode_now != APP_MODE_PC)
+                        app_cdio_adjust_volume(0.02f);
                     printf("IR: vol+\n");
                     break;
                 case KEY_NUMERIC_0: // 1

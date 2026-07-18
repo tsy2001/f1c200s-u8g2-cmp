@@ -1,5 +1,5 @@
-CC=arm-buildroot-linux-uclibcgnueabi-gcc
-SYSROOT=/home/tsy/F1C200S/flash/buildroot-2025.02.9/output/host/arm-buildroot-linux-uclibcgnueabi/sysroot
+CC=/home/tsy/f1c200s/buildroot-2025.02.9/output/host/bin/arm-buildroot-linux-uclibcgnueabi-gcc
+SYSROOT=/home/tsy/f1c200s/buildroot-2025.02.9/output/host/arm-buildroot-linux-uclibcgnueabi/sysroot
 
 TARGET=u8g2_hw_i2c_dvd
 
@@ -17,7 +17,7 @@ CPPFLAGS := \
   -I$(ROOT)/dr_libs \
   -D__ARM_LINUX__
 
-CFLAGS  := --sysroot=$(SYSROOT) -std=c99 -Wall -MMD -MP -O2 -g0 -pipe -flto=auto \
+CFLAGS  := --sysroot=$(SYSROOT) -std=c99 -Wall -MMD -MP -O1 -g0 -pipe -flto=auto \
   -march=armv5te -mtune=arm926ej-s -marm \
   -mfloat-abi=soft -msoft-float \
   -fomit-frame-pointer \
@@ -25,12 +25,13 @@ CFLAGS  := --sysroot=$(SYSROOT) -std=c99 -Wall -MMD -MP -O2 -g0 -pipe -flto=auto
   -ffunction-sections -fdata-sections \
   -D_POSIX_C_SOURCE=200809L
 LDFLAGS := --sysroot=$(SYSROOT) -flto=auto -Wl,-O1 -Wl,--as-needed -Wl,--gc-sections
-LDLIBS  := -lrt -lasound -lcdio -lpthread -lu8g2 -lu8g2font -lm
+LDLIBS  := -lrt -lasound -lcdio -lpthread -lu8g2 -lu8g2font -lusbgx -lm
 
 LOCAL_SRCS := \
   u8g2_hw_i2c.c \
   dvdplayer.c \
   dr_libs_impl.c \
+  cmp_module_ctl.c \
   app_usb.c \
   app_button.c \
   app_u8g2.c \
