@@ -18,13 +18,15 @@ typedef enum {
     APP_MODE_MENU = 0,
     APP_MODE_DISC,
     APP_MODE_SD,
-    APP_MODE_PC,
+    APP_MODE_UAC,
+    APP_MODE_MTP,
 } APP_MODE;
 
 typedef enum {
     APP_MENU_DISC = 0,
     APP_MENU_SD,
-    APP_MENU_PC,
+    APP_MENU_UAC,
+    APP_MENU_MTP,
     APP_MENU_COUNT,
 } APP_MENU_ITEM;
 
@@ -60,6 +62,7 @@ typedef struct {
     int cdio_refcount; /* number of threads currently using cdio */
 
     uint8_t usb_pc_mode; /* 1: USB peripheral serial shell mode, 0: normal host mode */
+    uint8_t usb_mtp_mode; /* 1: MTP mode active */
     pid_t usb_shell_pid; /* child shell pid bound to /dev/ttyGS0 */
 
     APP_MODE app_mode;

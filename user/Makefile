@@ -33,6 +33,7 @@ LOCAL_SRCS := \
   dr_libs_impl.c \
   cmp_module_ctl.c \
   app_usb.c \
+  app_mtp.c \
   app_button.c \
   app_u8g2.c \
   app_cdplayer.c

@@ -13,6 +13,7 @@
 #include <errno.h>
 #include "app_cdplayer.h"
 #include "app_usb.h"
+#include "app_mtp.h"
 #include "cmp_module_ctl.h"
 
 // 光驱设备
@@ -54,6 +55,8 @@ static void app_cdio_switch_to_menu_locked(void)
     app_cdio.app_mode = APP_MODE_MENU;
     app_cdio.return_to_menu = 0;
     app_cdio.usb_pc_mode = 0;
+    app_cdio.usb_mtp_mode = 0;
+    app_cdio.usb_shell_pid = 0;
     app_cdio_reset_playback_state_locked();
 }
 
@@ -588,7 +591,7 @@ void *cd_player_thread_entry(void *arg)
         pthread_mutex_lock(&app_cdio.lock);
         mode_now = app_cdio.app_mode;
         usb_pc_mode_now = app_cdio.usb_pc_mode;
-        if (mode_now == APP_MODE_MENU || mode_now == APP_MODE_PC)
+        if (mode_now == APP_MODE_MENU || mode_now == APP_MODE_UAC || mode_now == APP_MODE_MTP)
         {
             clear_album_info_handle(&app_cdio);
             app_cdio_reset_playback_state_locked();
@@ -610,11 +613,20 @@ void *cd_player_thread_entry(void *arg)
                     pthread_mutex_unlock(&app_cdio.lock);
                 }
             }
+            pthread_mutex_lock(&app_cdio.lock);
+            if (app_cdio.usb_mtp_mode)
+            {
+                pthread_mutex_unlock(&app_cdio.lock);
+                (void)app_mtp_exit_mode();
+                pthread_mutex_lock(&app_cdio.lock);
+                app_cdio.usb_mtp_mode = 0;
+            }
+            pthread_mutex_unlock(&app_cdio.lock);
             sleep_ms_local(100);
             continue;
         }
 
-        if (mode_now == APP_MODE_PC)
+        if (mode_now == APP_MODE_UAC)
         {
             pid_t shell_pid;
             app_cdio_close_pcm_if_open();
@@ -639,6 +651,36 @@ void *cd_player_thread_entry(void *arg)
                     app_cdio_switch_to_menu_locked();
                     pthread_mutex_unlock(&app_cdio.lock);
                 }
+            }
+            sleep(1);
+            continue;
+        }
+
+        if (mode_now == APP_MODE_MTP)
+        {
+            app_cdio_close_pcm_if_open();
+            app_cdio_set_mute(false);
+
+            pthread_mutex_lock(&app_cdio.lock);
+            if (!app_cdio.usb_mtp_mode)
+            {
+                pthread_mutex_unlock(&app_cdio.lock);
+                if (app_mtp_enter_mode() == 0)
+                {
+                    pthread_mutex_lock(&app_cdio.lock);
+                    app_cdio.usb_mtp_mode = 1;
+                    pthread_mutex_unlock(&app_cdio.lock);
+                }
+                else
+                {
+                    pthread_mutex_lock(&app_cdio.lock);
+                    app_cdio_switch_to_menu_locked();
+                    pthread_mutex_unlock(&app_cdio.lock);
+                }
+            }
+            else
+            {
+                pthread_mutex_unlock(&app_cdio.lock);
             }
             sleep(1);
             continue;
@@ -830,6 +872,7 @@ void app_cdplayer_start(void)
 
     pthread_mutex_lock(&app_cdio.lock);
     app_cdio.usb_pc_mode = 0;
+    app_cdio.usb_mtp_mode = 0;
     app_cdio.usb_shell_pid = 0;
     app_cdio.app_mode = APP_MODE_MENU;
     app_cdio.menu_index = APP_MENU_DISC;
@@ -974,8 +1017,11 @@ void app_cdio_menu_confirm(void)
         case APP_MENU_SD:
             app_cdio.app_mode = APP_MODE_SD;
             break;
-        case APP_MENU_PC:
-            app_cdio.app_mode = APP_MODE_PC;
+        case APP_MENU_UAC:
+            app_cdio.app_mode = APP_MODE_UAC;
+            break;
+        case APP_MENU_MTP:
+            app_cdio.app_mode = APP_MODE_MTP;
             break;
         default:
             app_cdio.app_mode = APP_MODE_MENU;
@@ -989,12 +1035,21 @@ void app_cdio_return_to_menu(void)
 {
     pid_t shell_pid = 0;
     uint8_t exit_usb_now = 0;
+    APP_MODE prev_mode;
 
     pthread_mutex_lock(&app_cdio.lock);
-    if (app_cdio.app_mode == APP_MODE_PC)
+    prev_mode = app_cdio.app_mode;
+    if (app_cdio.app_mode == APP_MODE_UAC)
     {
         shell_pid = app_cdio.usb_shell_pid;
-        exit_usb_now = app_cdio.usb_pc_mode;
+        exit_usb_now = 1;
+        app_cdio.usb_pc_mode = 0;
+        app_cdio_switch_to_menu_locked();
+    }
+    else if (app_cdio.app_mode == APP_MODE_MTP)
+    {
+        exit_usb_now = 1;
+        app_cdio.usb_mtp_mode = 0;
         app_cdio_switch_to_menu_locked();
     }
     else if (!app_cdio.cdda_ready_flag && app_cdio.cdio == NULL)
@@ -1012,11 +1067,21 @@ void app_cdio_return_to_menu(void)
 
     if (exit_usb_now)
     {
-        (void)app_usb_exit_pc_mode(&shell_pid);
-        pthread_mutex_lock(&app_cdio.lock);
-        app_cdio.usb_shell_pid = shell_pid;
-        app_cdio.usb_pc_mode = 0;
-        pthread_mutex_unlock(&app_cdio.lock);
+        if (prev_mode == APP_MODE_UAC)
+        {
+            (void)app_usb_exit_pc_mode(&shell_pid);
+            pthread_mutex_lock(&app_cdio.lock);
+            app_cdio.usb_shell_pid = shell_pid;
+            app_cdio.usb_pc_mode = 0;
+            pthread_mutex_unlock(&app_cdio.lock);
+        }
+        else if (prev_mode == APP_MODE_MTP)
+        {
+            (void)app_mtp_exit_mode();
+            pthread_mutex_lock(&app_cdio.lock);
+            app_cdio.usb_mtp_mode = 0;
+            pthread_mutex_unlock(&app_cdio.lock);
+        }
     }
 }
 

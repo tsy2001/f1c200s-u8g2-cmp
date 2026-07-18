@@ -143,18 +143,3 @@ int cmp_module_set_usb_mode(uint32_t mode)
 
     return ret < 0 ? -1 : 0;
 }
-
-int cmp_module_set_usb_mode_host(void)
-{
-    return cmp_module_set_usb_mode(CMP_MODULE_USB_MODE_HOST);
-}
-
-int cmp_module_set_usb_mode_peripheral(void)
-{
-    return cmp_module_set_usb_mode(CMP_MODULE_USB_MODE_PERIPHERAL);
-}
-
-int cmp_module_set_usb_mode_otg(void)
-{
-    return cmp_module_set_usb_mode(CMP_MODULE_USB_MODE_OTG);
-}

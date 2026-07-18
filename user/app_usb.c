@@ -29,30 +29,44 @@
 #define USB_GSERIAL_TTY "/dev/ttyGS0"
 #define USB_UDC_NAME "musb-hdrc.1.auto"
 #define USB_CONFIGFS_PATH "/sys/kernel/config"
+
 #define USB_GADGET_BASE "/sys/kernel/config/usb_gadget"
 #define USB_GADGET_NAME "g1"
 #define USB_GADGET_PATH USB_GADGET_BASE "/" USB_GADGET_NAME
-#define USB_GADGET_LANG "0x409"
 #define USB_GADGET_CFG "c.1"
+
 #define USB_GADGET_UAC_FUNC "uac2.usb0"
 #define USB_GADGET_ACM_FUNC "acm.usb0"
 #define USB_GADGET_UAC_LINK "uac2"
 #define USB_GADGET_ACM_LINK "acm.GS0"
-#define USB_ENABLE_ACM_CONSOLE 1
-#define USB_AUDIO_RATE 48000
-#define USB_AUDIO_CHANNELS 2
+
+#define USB_UDC_CURRENT_SPEED_PATH "/sys/class/udc/" USB_UDC_NAME "/current_speed"
+
+#define USB_AUDIO_RATE_FS 48000
+#define USB_AUDIO_RATE_HS 96000
+#define USB_AUDIO_RATE_FS_STR "48000"
+#define USB_AUDIO_RATE_HS_STR "96000"
+#define USB_AUDIO_FORMAT "S24_3LE"
+#define USB_AUDIO_SAMPLE_BYTES 3
+
 #define USB_MAX_CAPTURE_DEVS 8
-#define USB_CODEC_PLAYBACK_DEV "hw:1,0"
+#define USB_CODEC_PLAYBACK_DEV "plughw:1,0"
+
 #define USB_ALSALOOP_PATH "/usr/bin/alsaloop"
-#define USB_ALSALOOP_LATENCY_US "50000"
-#define USB_ALSALOOP_BUFFER_FRAMES "960"
-#define USB_ALSALOOP_PERIOD_FRAMES "240"
+#define USB_ALSALOOP_LATENCY_US "100000"
 
 static pthread_t usb_audio_thread;
 static pthread_mutex_t usb_audio_lock = PTHREAD_MUTEX_INITIALIZER;
 static int usb_audio_running = 0;
 static int usb_audio_stop = 0;
-static bool strcasestr_simple(const char *haystack, const char *needle);
+static int usb_audio_rate = USB_AUDIO_RATE_FS;
+static const char *usb_audio_rate_str = USB_AUDIO_RATE_FS_STR;
+
+static pthread_t usb_console_thread;
+static pthread_mutex_t usb_console_lock = PTHREAD_MUTEX_INITIALIZER;
+static int usb_console_running = 0;
+static int usb_console_stop = 0;
+static pid_t usb_console_pid = 0;
 
 typedef struct
 {
@@ -141,7 +155,7 @@ static int set_usb_switch_level(bool high)
 
 static int set_usb_mode_host(void)
 {
-    if (cmp_module_set_usb_mode_host() < 0)
+    if (cmp_module_set_usb_mode(CMP_MODULE_USB_MODE_HOST) < 0)
     {
         printf("set usb mode host failed: %s\n", strerror(errno));
         return -1;
@@ -152,7 +166,7 @@ static int set_usb_mode_host(void)
 
 static int set_usb_mode_peripheral(void)
 {
-    if (cmp_module_set_usb_mode_peripheral() < 0)
+    if (cmp_module_set_usb_mode(CMP_MODULE_USB_MODE_PERIPHERAL) < 0)
     {
         printf("set usb mode peripheral failed: %s\n", strerror(errno));
         return -1;
@@ -296,6 +310,23 @@ static int write_usb_function_int_attr(const char *func, const char *attr,
     return write_int_to_file(path, value);
 }
 
+static void set_usb_audio_profile(bool high_speed)
+{
+    if (high_speed)
+    {
+        usb_audio_rate = USB_AUDIO_RATE_HS;
+        usb_audio_rate_str = USB_AUDIO_RATE_HS_STR;
+    }
+    else
+    {
+        usb_audio_rate = USB_AUDIO_RATE_FS;
+        usb_audio_rate_str = USB_AUDIO_RATE_FS_STR;
+    }
+
+    printf("usb audio profile: %s %dHz 24bit stereo\n",
+           high_speed ? "high-speed" : "full-speed safe", usb_audio_rate);
+}
+
 static int configure_usb_audio_function_attrs(void)
 {
     struct {
@@ -303,11 +334,11 @@ static int configure_usb_audio_function_attrs(void)
         int value;
     } attrs[] = {
         { "c_chmask", 0x3 },
-        { "c_srate", USB_AUDIO_RATE },
-        { "c_ssize", 2 },
+        { "c_srate", usb_audio_rate },
+        { "c_ssize", USB_AUDIO_SAMPLE_BYTES },
         { "p_chmask", 0 },
-        { "p_srate", USB_AUDIO_RATE },
-        { "p_ssize", 2 },
+        { "p_srate", usb_audio_rate },
+        { "p_ssize", USB_AUDIO_SAMPLE_BYTES },
     };
     size_t i;
 
@@ -362,6 +393,60 @@ static int unbind_usb_gadget_udc(void)
     if (write_string_to_file(udc_file, "\n") < 0)
         return -1;
     return 0;
+}
+
+static int wait_usb_current_speed(bool *high_speed, unsigned int timeout_ms)
+{
+    unsigned int waited = 0;
+    char speed[64];
+
+    while (waited < timeout_ms)
+    {
+        if (read_string_from_file(USB_UDC_CURRENT_SPEED_PATH,
+                                  speed, sizeof(speed)) == 0)
+        {
+            if (strcasestr_simple(speed, "high"))
+            {
+                *high_speed = true;
+                printf("usb current speed: %s\n", speed);
+                return 0;
+            }
+            if (strcasestr_simple(speed, "full"))
+            {
+                *high_speed = false;
+                printf("usb current speed: %s\n", speed);
+                return 0;
+            }
+            if (speed[0] != '\0' && !strcasestr_simple(speed, "unknown"))
+            {
+                printf("usb current speed unhandled: %s, use full-speed safe profile\n",
+                       speed);
+                *high_speed = false;
+                return 0;
+            }
+        }
+
+        sleep_ms_local(100);
+        waited += 100;
+    }
+
+    printf("usb current speed not ready, use full-speed safe profile\n");
+    *high_speed = false;
+    return -1;
+}
+
+static bool usb_udc_is_connected(void)
+{
+    char speed[64];
+
+    if (read_string_from_file(USB_UDC_CURRENT_SPEED_PATH, speed, sizeof(speed)) < 0)
+        return false;
+
+    if (speed[0] == '\0' || strcasestr_simple(speed, "unknown") ||
+        strcasestr_simple(speed, "not attached"))
+        return false;
+
+    return true;
 }
 
 static int find_uac_gadget_card(int *card_index)
@@ -527,15 +612,11 @@ static int start_alsaloop_process(int uac_card, int cap_dev, pid_t *pid_out)
         execl(USB_ALSALOOP_PATH, "alsaloop",
               "-C", cap_name,
               "-P", USB_CODEC_PLAYBACK_DEV,
-              "-f", "S16_LE",
+              "-f", USB_AUDIO_FORMAT,
               "-c", "2",
-              "-r", "48000",
+              "-r", usb_audio_rate_str,
               "-t", USB_ALSALOOP_LATENCY_US,
-              "-B", USB_ALSALOOP_BUFFER_FRAMES,
-              "-E", USB_ALSALOOP_PERIOD_FRAMES,
               "-S", "0",
-              "-b",
-              "-U",
               (char *)NULL);
         _exit(127);
     }
@@ -561,6 +642,17 @@ static void *usb_audio_alsaloop_entry(void *arg)
     {
         int status;
         pid_t rc;
+
+        if (!usb_udc_is_connected())
+        {
+            if (loop_pid > 0)
+            {
+                stop_child_process(&loop_pid, "alsaloop");
+                cap_count = 0;
+            }
+            sleep_ms_local(200);
+            continue;
+        }
 
         if (loop_pid > 0)
         {
@@ -687,12 +779,12 @@ static int configure_usb_gadget_composite(void)
         .bMaxPacketSize0 = 64,
         .idVendor = 0x1d6b,
         .idProduct = 0x0109,
-        .bcdDevice = 0x0103,
+        .bcdDevice = 0x0104,
     };
     struct usbg_gadget_strs gadget_strs = {
-        .manufacturer = "F1C200S",
-        .product = "USB Audio + Console",
-        .serial = "CMP0004",
+        .manufacturer = "Allwinner",
+        .product = "F1C200S CMP Module",
+        .serial = "TSY20010608",
     };
     struct usbg_config_attrs config_attrs = {
         .bmAttributes = 0x80,
@@ -793,7 +885,56 @@ usbg_fail:
     return -1;
 }
 
-#if USB_ENABLE_ACM_CONSOLE
+static int configure_usb_gadget_for_current_speed(void)
+{
+    bool high_speed = false;
+
+    set_usb_audio_profile(false);
+    if (configure_usb_gadget_composite() < 0)
+        return -1;
+
+    if (wait_usb_current_speed(&high_speed, 2500) < 0 || !high_speed)
+        return 0;
+
+    printf("usb high-speed detected, rebuild UAC2 gadget as 96kHz/24bit\n");
+    (void)unbind_usb_gadget_udc();
+    sleep_ms_local(100);
+
+    set_usb_audio_profile(true);
+    if (configure_usb_gadget_composite() < 0)
+        return -1;
+
+    (void)wait_usb_current_speed(&high_speed, 1500);
+    return 0;
+}
+
+static bool usb_console_should_stop(void)
+{
+    bool stop;
+
+    pthread_mutex_lock(&usb_console_lock);
+    stop = (usb_console_stop != 0);
+    pthread_mutex_unlock(&usb_console_lock);
+    return stop;
+}
+
+static void usb_console_set_pid(pid_t pid)
+{
+    pthread_mutex_lock(&usb_console_lock);
+    usb_console_pid = pid;
+    pthread_mutex_unlock(&usb_console_lock);
+}
+
+static pid_t usb_console_get_pid(void)
+{
+    pid_t pid;
+
+    pthread_mutex_lock(&usb_console_lock);
+    pid = usb_console_pid;
+    pthread_mutex_unlock(&usb_console_lock);
+    return pid;
+}
+
 static const char *tty_dev_name(const char *tty_path)
 {
     const char *slash = strrchr(tty_path, '/');
@@ -966,13 +1107,151 @@ static void stop_usb_console(pid_t *pid_ptr)
         (void)waitpid(pid, &status, 0);
     *pid_ptr = 0;
 }
-#else
-static void stop_usb_console(pid_t *pid_ptr)
+
+static void *usb_console_entry(void *arg)
 {
-    if (pid_ptr)
-        *pid_ptr = 0;
+    pid_t pid = 0;
+    int fail_count = 0;
+
+    (void)arg;
+
+    while (!usb_console_should_stop())
+    {
+        int status;
+        pid_t rc;
+
+        if (!usb_udc_is_connected())
+        {
+            if (pid > 0)
+            {
+                stop_usb_console(&pid);
+                usb_console_set_pid(0);
+            }
+            sleep_ms_local(200);
+            continue;
+        }
+
+        if (pid > 0)
+        {
+            rc = waitpid(pid, &status, WNOHANG);
+            if (rc == 0)
+            {
+                sleep_ms_local(300);
+                continue;
+            }
+
+            printf("usb console exited: pid=%d status=%d\n", (int)pid, status);
+            pid = 0;
+            usb_console_set_pid(0);
+            sleep_ms_local(300);
+            continue;
+        }
+
+        if (wait_for_tty_node(USB_GSERIAL_TTY, 1000) < 0)
+        {
+            fail_count++;
+            if ((fail_count % 5) == 1)
+                printf("usb console waiting for %s... (fail=%d)\n",
+                       USB_GSERIAL_TTY, fail_count);
+            continue;
+        }
+
+        pid = spawn_console_on_tty();
+        if (pid <= 0)
+        {
+            fail_count++;
+            sleep_ms_local(500);
+            continue;
+        }
+
+        fail_count = 0;
+        usb_console_set_pid(pid);
+    }
+
+    if (pid > 0)
+    {
+        stop_usb_console(&pid);
+        usb_console_set_pid(0);
+    }
+
+    return NULL;
 }
-#endif
+
+static int usb_console_loop_start(pid_t *console_pid)
+{
+    int rc;
+    unsigned int waited = 0;
+
+    pthread_mutex_lock(&usb_console_lock);
+    if (usb_console_running)
+    {
+        if (console_pid)
+            *console_pid = usb_console_pid;
+        pthread_mutex_unlock(&usb_console_lock);
+        return 0;
+    }
+
+    usb_console_stop = 0;
+    usb_console_pid = 0;
+    rc = pthread_create(&usb_console_thread, NULL, usb_console_entry, NULL);
+    if (rc == 0)
+        usb_console_running = 1;
+    pthread_mutex_unlock(&usb_console_lock);
+
+    if (rc != 0)
+    {
+        printf("start usb console monitor failed: %s\n", strerror(rc));
+        return -1;
+    }
+
+    while (waited < 2000)
+    {
+        pid_t pid = usb_console_get_pid();
+
+        if (pid > 0)
+        {
+            if (console_pid)
+                *console_pid = pid;
+            return 0;
+        }
+
+        sleep_ms_local(50);
+        waited += 50;
+    }
+
+    printf("usb console monitor started, shell not ready yet\n");
+    if (console_pid)
+        *console_pid = 0;
+    return 0;
+}
+
+static void usb_console_loop_stop(pid_t *console_pid)
+{
+    pthread_t tid;
+    int need_join = 0;
+
+    pthread_mutex_lock(&usb_console_lock);
+    if (usb_console_running)
+    {
+        usb_console_stop = 1;
+        tid = usb_console_thread;
+        need_join = 1;
+    }
+    pthread_mutex_unlock(&usb_console_lock);
+
+    if (need_join)
+    {
+        pthread_join(tid, NULL);
+        pthread_mutex_lock(&usb_console_lock);
+        usb_console_running = 0;
+        usb_console_stop = 0;
+        usb_console_pid = 0;
+        pthread_mutex_unlock(&usb_console_lock);
+    }
+
+    if (console_pid)
+        *console_pid = 0;
+}
 
 int app_usb_enter_pc_mode(pid_t *console_pid)
 {
@@ -983,53 +1262,50 @@ int app_usb_enter_pc_mode(pid_t *console_pid)
 
     if (set_usb_mode_peripheral() < 0)
     {
-        (void)set_usb_switch_level(true);
+        set_usb_switch_level(true);
         return -1;
     }
 
-    if (configure_usb_gadget_composite() < 0)
+    if (configure_usb_gadget_for_current_speed() < 0)
     {
-        (void)set_usb_mode_host();
-        (void)set_usb_switch_level(true);
+        set_usb_mode_host();
+        set_usb_switch_level(true);
         return -1;
     }
 
-#if USB_ENABLE_ACM_CONSOLE
     if (wait_for_tty_node(USB_GSERIAL_TTY, 6000) < 0)
     {
         printf("tty gadget node %s not ready\n", USB_GSERIAL_TTY);
-        (void)unbind_usb_gadget_udc();
-        (void)set_usb_mode_host();
-        (void)set_usb_switch_level(true);
+        unbind_usb_gadget_udc();
+        set_usb_mode_host();
+        set_usb_switch_level(true);
         return -1;
     }
 
-    pid = spawn_console_on_tty();
-    if (pid <= 0)
+    if (usb_console_loop_start(&pid) < 0)
     {
-        (void)unbind_usb_gadget_udc();
-        (void)set_usb_mode_host();
-        (void)set_usb_switch_level(true);
+        unbind_usb_gadget_udc();
+        set_usb_mode_host();
+        set_usb_switch_level(true);
         return -1;
     }
-#endif
 
     if (wait_codec_playback_ready(4000) < 0)
     {
         printf("codec playback %s is still busy before loop start\n", USB_CODEC_PLAYBACK_DEV);
-        stop_usb_console(&pid);
-        (void)unbind_usb_gadget_udc();
-        (void)set_usb_mode_host();
-        (void)set_usb_switch_level(true);
+        unbind_usb_gadget_udc();
+        usb_console_loop_stop(&pid);
+        set_usb_mode_host();
+        set_usb_switch_level(true);
         return -1;
     }
 
     if (usb_audio_loop_start() < 0)
     {
-        stop_usb_console(&pid);
-        (void)unbind_usb_gadget_udc();
-        (void)set_usb_mode_host();
-        (void)set_usb_switch_level(true);
+        unbind_usb_gadget_udc();
+        usb_console_loop_stop(&pid);
+        set_usb_mode_host();
+        set_usb_switch_level(true);
         return -1;
     }
 
@@ -1041,11 +1317,11 @@ int app_usb_exit_pc_mode(pid_t *console_pid)
 {
     int rc = 0;
 
-    usb_audio_loop_stop();
-    stop_usb_console(console_pid);
     if (unbind_usb_gadget_udc() < 0)
         rc = -1;
     sleep_ms_local(30);
+    usb_audio_loop_stop();
+    usb_console_loop_stop(console_pid);
     cleanup_usb_gadget_function_links();
     cleanup_usb_gadget_function_dirs();
 

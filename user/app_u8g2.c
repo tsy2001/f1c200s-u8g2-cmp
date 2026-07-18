@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <signal.h>
+#include <errno.h>
 #include <linux/input.h>
 #include <pthread.h>
 #include <u8g2/u8g2.h>
@@ -14,6 +15,16 @@
 #include "logo.h"
 
 #define I2C_BUS 2
+
+static void sleep_ms_local(unsigned int ms)
+{
+    struct timespec req;
+
+    req.tv_sec = ms / 1000;
+    req.tv_nsec = (long)(ms % 1000) * 1000000L;
+    while (nanosleep(&req, &req) < 0 && errno == EINTR)
+        ;
+}
 
 u8g2_t u8g2;
 pthread_t ui_thread;
@@ -42,8 +53,10 @@ void *ui_thread_entry(void *arg)
     while (1)
     {
         u8g2_cdplayer();
-        if (!album_ready_flag) usleep(50000);
-        else usleep(10000);
+        if (!album_ready_flag)
+            sleep_ms_local(50);
+        else
+            sleep_ms_local(10);
     }
 
     libu8g2_Done(&u8g2);
@@ -93,7 +106,6 @@ void u8g2_cdplayer(void)
     float volume;
     uint8_t stop_flag, next_flag, prev_flag;
     uint16_t album_entries;
-    uint8_t usb_pc_mode;
     APP_MODE app_mode;
     APP_MENU_ITEM menu_index;
     char artist_buf[ONE_ALBUM_LENGTH];
@@ -112,7 +124,6 @@ void u8g2_cdplayer(void)
     stop_flag = app_cdio.stop;
     next_flag = app_cdio.next;
     prev_flag = app_cdio.prev;
-    usb_pc_mode = app_cdio.usb_pc_mode;
     app_mode = app_cdio.app_mode;
     menu_index = app_cdio.menu_index;
     album_entries = app_cdio.album_entries;
@@ -150,13 +161,13 @@ void u8g2_cdplayer(void)
 
     if (app_mode == APP_MODE_MENU)
     {
-        const char *items[APP_MENU_COUNT] = {"Disc", "SD", "PC"};
+        const char *items[APP_MENU_COUNT] = {"Disc", "SD", "UAC", "MTP"};
 
         u8g2_DrawXBM(&u8g2, 0, 0, 64, 64, bmp);
         u8g2_SetFont(&u8g2, u8g2_font_spleen8x16_mf);
         for (int i = 0; i < APP_MENU_COUNT; i++)
         {
-            int y = 18 + i * 18;
+            int y = 13 + i * 15;
             if ((APP_MENU_ITEM)i == menu_index)
                 u8g2_DrawStr(&u8g2, 72, y, ">");
             u8g2_DrawStr(&u8g2, 88, y, items[i]);
@@ -246,21 +257,25 @@ void u8g2_cdplayer(void)
         u8g2_DrawXBM(&u8g2, 0, 0, 64, 64, bmp);
 
         u8g2_SetFont(&u8g2, u8g2_font_spleen8x16_mf);
-        if (usb_pc_mode)
+        if (app_mode == APP_MODE_UAC)
         {
-            u8g2_DrawStr(&u8g2, 78, 35, "PC");
+            u8g2_DrawStr(&u8g2, 78, 35, "UAC");
+            u8g2_DrawStr(&u8g2, 78, 50, "Mode");
+        }
+        else if (app_mode == APP_MODE_MTP)
+        {
+            u8g2_DrawStr(&u8g2, 78, 35, "MTP");
             u8g2_DrawStr(&u8g2, 78, 50, "Mode");
         }
         else
         {
             u8g2_DrawStr(&u8g2, 78, 35, "No");
             u8g2_DrawStr(&u8g2, 78, 50, "Disc");
-        }
-
-        if (stat && !usb_pc_mode)
-        {
-            u8g2_SetFont(&u8g2, u8g2_font_open_iconic_all_2x_t);
-            u8g2_DrawGlyph(&u8g2, 107, 21, 197);
+            if (stat)
+            {
+                u8g2_SetFont(&u8g2, u8g2_font_open_iconic_all_2x_t);
+                u8g2_DrawGlyph(&u8g2, 107, 21, 197);
+            }
         }
     }
 

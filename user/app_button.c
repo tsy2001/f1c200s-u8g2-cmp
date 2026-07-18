@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <errno.h>
 #include <signal.h>
 #include <arpa/inet.h>
 #include <string.h>
@@ -30,6 +31,16 @@ pthread_t button_ir_thread;
 led_t *led_handle = NULL;
 KeyDetector key[3];
 extern APP_CDIO app_cdio;
+
+static void sleep_ms_local(unsigned int ms)
+{
+    struct timespec req;
+
+    req.tv_sec = ms / 1000;
+    req.tv_nsec = (long)(ms % 1000) * 1000000L;
+    while (nanosleep(&req, &req) < 0 && errno == EINTR)
+        ;
+}
 
 uint32_t GetSystemTime(void)
 {
@@ -205,11 +216,11 @@ void *button_handl_entry(void *arg)
             printf("Left Click detected\n");
             if (mode_now == APP_MODE_MENU)
                 app_cdio_menu_prev();
-            else if (mode_now != APP_MODE_PC)
+            else if (mode_now != APP_MODE_UAC && mode_now != APP_MODE_MTP)
                 app_cdio_adjust_volume(-0.02f);
             break;
         case KEY_EVENT_DOUBLE:
-            if (mode_now != APP_MODE_MENU && mode_now != APP_MODE_PC)
+            if (mode_now != APP_MODE_MENU && mode_now != APP_MODE_UAC && mode_now != APP_MODE_MTP)
                 app_cdio_set_prev();
             printf("Left Double click detected\n");
             break;
@@ -226,12 +237,12 @@ void *button_handl_entry(void *arg)
         case KEY_EVENT_CLICK:
             if (mode_now == APP_MODE_MENU)
                 app_cdio_menu_confirm();
-            else if (mode_now != APP_MODE_PC)
+            else if (mode_now != APP_MODE_UAC && mode_now != APP_MODE_MTP)
                 app_cdio_toggle_stop();
             printf("Mid Click detected\n");
             break;
         case KEY_EVENT_DOUBLE:
-            if (mode_now != APP_MODE_MENU && mode_now != APP_MODE_PC)
+            if (mode_now != APP_MODE_MENU && mode_now != APP_MODE_UAC && mode_now != APP_MODE_MTP)
                 app_cdio_set_eject();
             printf("Mid Double click detected\n");
             break;
@@ -251,11 +262,11 @@ void *button_handl_entry(void *arg)
             printf("Right Click detected\n");
             if (mode_now == APP_MODE_MENU)
                 app_cdio_menu_next();
-            else if (mode_now != APP_MODE_PC)
+            else if (mode_now != APP_MODE_UAC && mode_now != APP_MODE_MTP)
                 app_cdio_adjust_volume(0.02f);
             break;
         case KEY_EVENT_DOUBLE:
-            if (mode_now != APP_MODE_MENU && mode_now != APP_MODE_PC)
+            if (mode_now != APP_MODE_MENU && mode_now != APP_MODE_UAC && mode_now != APP_MODE_MTP)
                 app_cdio_set_next();
             printf("Right Double click detected\n");
             break;
@@ -270,7 +281,7 @@ void *button_handl_entry(void *arg)
         {
             //beep_play_button(1);
             led_write(led_handle, 1);
-            usleep(200000);
+            sleep_ms_local(200);
             led_write(led_handle, 0);
             led_set_trigger(led_handle, "rc-feedback");
             //beep_play_button(0);
@@ -424,7 +435,7 @@ void *button_ir_entry(void *arg)
                 case KEY_PAUSE: // pause
                     if (mode_now == APP_MODE_MENU)
                         app_cdio_menu_confirm();
-                    else if (mode_now != APP_MODE_PC)
+                    else if (mode_now != APP_MODE_UAC && mode_now != APP_MODE_MTP)
                         app_cdio_toggle_stop();
                     printf("IR: pause\n");
                     break;
@@ -438,24 +449,24 @@ void *button_ir_entry(void *arg)
                 case KEY_PREVIOUS: // prev
                     if (mode_now == APP_MODE_MENU)
                         app_cdio_menu_prev();
-                    else if (mode_now != APP_MODE_PC)
+                    else if (mode_now != APP_MODE_UAC && mode_now != APP_MODE_MTP)
                         app_cdio_set_prev();
                     printf("IR: prev\n");
                     break;
                 case KEY_NEXT: // next
                     if (mode_now == APP_MODE_MENU)
                         app_cdio_menu_next();
-                    else if (mode_now != APP_MODE_PC)
+                    else if (mode_now != APP_MODE_UAC && mode_now != APP_MODE_MTP)
                         app_cdio_set_next();
                     printf("IR: next\n");
                     break;
                 case KEY_VOLUMEDOWN: // vol-
-                    if (mode_now != APP_MODE_PC)
+                    if (mode_now != APP_MODE_UAC && mode_now != APP_MODE_MTP)
                         app_cdio_adjust_volume(-0.02f);
                     printf("IR: vol-\n");
                     break;
                 case KEY_VOLUMEUP: // vol+
-                    if (mode_now != APP_MODE_PC)
+                    if (mode_now != APP_MODE_UAC && mode_now != APP_MODE_MTP)
                         app_cdio_adjust_volume(0.02f);
                     printf("IR: vol+\n");
                     break;

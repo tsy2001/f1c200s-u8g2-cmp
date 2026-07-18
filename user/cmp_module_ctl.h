@@ -21,8 +21,5 @@ int cmp_module_set_codec_mute(bool high);
 int cmp_module_set_usb_switch(bool high);
 
 int cmp_module_set_usb_mode(uint32_t mode);
-int cmp_module_set_usb_mode_host(void);
-int cmp_module_set_usb_mode_peripheral(void);
-int cmp_module_set_usb_mode_otg(void);
 
 #endif
