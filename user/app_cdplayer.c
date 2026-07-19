@@ -310,7 +310,7 @@ uint8_t playCDTrack(APP_CDIO *pCDIO, track_t track)
             {
                 // 无效跳转，继续播放当前音轨
                 pCDIO->manual_track = 0;
-                sleep(1);
+                sleep_ms_local(1000);
                 continue;
             }
             
@@ -342,7 +342,7 @@ uint8_t playCDTrack(APP_CDIO *pCDIO, track_t track)
             {
                 app_cdio_set_mute(true);
             }
-            sleep(1);
+            sleep_ms_local(1000);
         }
     }
 
@@ -365,7 +365,7 @@ void readCDInfo(APP_CDIO *pCDIO)
             pCDIO->cdda_ready_flag = 0;
             pthread_mutex_unlock(&pCDIO->lock);
             printf("CD handle is NULL when reading track info\n");
-            sleep(2);
+            sleep_ms_local(2000);
             if (++attempts > 5)
                 return; // 放弃读取
             continue;
@@ -382,9 +382,9 @@ void readCDInfo(APP_CDIO *pCDIO)
             pCDIO->cdda_ready_flag = 0;
             pthread_mutex_unlock(&pCDIO->lock);
             printf("Failed to get CD track info\n");
-            sleep(2);
-            if (++attempts > 5)
-                return;
+                sleep_ms_local(2000);
+                if (++attempts > 5)
+                    return;
             continue;
         }
         break;
@@ -652,7 +652,7 @@ void *cd_player_thread_entry(void *arg)
                     pthread_mutex_unlock(&app_cdio.lock);
                 }
             }
-            sleep(1);
+            sleep_ms_local(1000);
             continue;
         }
 
@@ -682,13 +682,13 @@ void *cd_player_thread_entry(void *arg)
             {
                 pthread_mutex_unlock(&app_cdio.lock);
             }
-            sleep(1);
+            sleep_ms_local(1000);
             continue;
         }
 
         if (app_cdio_open_pcm_if_needed() < 0)
         {
-            sleep(1);
+            sleep_ms_local(1000);
             continue;
         }
 
@@ -710,11 +710,11 @@ void *cd_player_thread_entry(void *arg)
                 app_cdio.album_ready_flag = 0;
                 app_cdio.now_title[0] = '\0';
                 pthread_mutex_unlock(&app_cdio.lock);
-                if(eject_flag) {sleep(2); continue;}
+                if(eject_flag) {sleep_ms_local(2000); continue;}
                 play_sdmmc(SDMMC_MOUNT_POINT, &app_cdio);
                 if (app_cdio_take_return_to_menu())
                     continue;
-                sleep(2);
+                sleep_ms_local(2000);
                 continue;
             }
 
@@ -729,7 +729,7 @@ void *cd_player_thread_entry(void *arg)
                 }
             }
             pthread_mutex_unlock(&app_cdio.lock);
-            sleep(1);
+            sleep_ms_local(1000);
             continue;
         }
 
@@ -737,7 +737,7 @@ void *cd_player_thread_entry(void *arg)
         if (!cd)
         {
             printf("Failed to open CD \n");
-            sleep(2);
+            sleep_ms_local(2000);
             continue;
         }
 
@@ -746,7 +746,7 @@ void *cd_player_thread_entry(void *arg)
         {
             printf("Waiting for disc...\n");
             cdio_destroy(cd);
-            sleep(2);
+            sleep_ms_local(2000);
             continue;
         }
 
@@ -860,7 +860,7 @@ void *cd_player_thread_entry(void *arg)
             }
         }
 
-        sleep(2);
+        sleep_ms_local(2000);
     }
 
     return NULL;
