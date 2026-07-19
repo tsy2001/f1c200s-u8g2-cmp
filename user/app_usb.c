@@ -51,6 +51,7 @@
 
 #define USB_MAX_CAPTURE_DEVS 8
 #define USB_CODEC_PLAYBACK_DEV "plughw:1,0"
+#define USB_UAC_CAPTURE_DEV "hw:2,0"
 
 #define USB_ALSALOOP_PATH "/usr/bin/alsaloop"
 #define USB_ALSALOOP_LATENCY_US "100000"
@@ -334,11 +335,10 @@ static int configure_usb_audio_function_attrs(void)
         int value;
     } attrs[] = {
         { "c_chmask", 0x3 },
-        { "c_srate", usb_audio_rate },
+        { "c_srate", USB_AUDIO_RATE_FS },
         { "c_ssize", USB_AUDIO_SAMPLE_BYTES },
-        { "p_chmask", 0 },
-        { "p_srate", usb_audio_rate },
-        { "p_ssize", USB_AUDIO_SAMPLE_BYTES },
+        { "fs_c_srate", USB_AUDIO_RATE_FS },
+        { "hs_c_srate", USB_AUDIO_RATE_HS },
     };
     size_t i;
 
@@ -449,36 +449,6 @@ static bool usb_udc_is_connected(void)
     return true;
 }
 
-static int find_uac_gadget_card(int *card_index)
-{
-    int card = -1;
-    int err = snd_card_next(&card);
-    if (err < 0)
-    {
-        printf("snd_card_next failed: %s\n", snd_strerror(err));
-        return -1;
-    }
-
-    while (card >= 0)
-    {
-        char *name = NULL;
-        if (snd_card_get_name(card, &name) >= 0 && name)
-        {
-            if (strcasestr_simple(name, "uac") || strcasestr_simple(name, "gadget"))
-            {
-                *card_index = card;
-                free(name);
-                return 0;
-            }
-            free(name);
-        }
-        if (snd_card_next(&card) < 0)
-            break;
-    }
-
-    return -1;
-}
-
 static void stop_child_process(pid_t *pid_ptr, const char *name)
 {
     int status;
@@ -504,66 +474,6 @@ static void stop_child_process(pid_t *pid_ptr, const char *name)
     if (kill(pid, SIGKILL) == 0)
         (void)waitpid(pid, &status, 0);
     *pid_ptr = 0;
-}
-
-static int list_capture_pcm_devs_on_card(int card_index, usb_capture_dev_t *out, int max_count)
-{
-    snd_ctl_t *ctl = NULL;
-    snd_pcm_info_t *pcminfo = NULL;
-    char ctl_name[32];
-    int dev = -1;
-    int rc;
-    int found = 0;
-    int stored = 0;
-
-    snprintf(ctl_name, sizeof(ctl_name), "hw:%d", card_index);
-    rc = snd_ctl_open(&ctl, ctl_name, 0);
-    if (rc < 0)
-    {
-        printf("snd_ctl_open %s failed: %s\n", ctl_name, snd_strerror(rc));
-        return -1;
-    }
-
-    rc = snd_pcm_info_malloc(&pcminfo);
-    if (rc < 0 || !pcminfo)
-    {
-        printf("snd_pcm_info_malloc failed: %s\n", snd_strerror(rc));
-        snd_ctl_close(ctl);
-        return -1;
-    }
-
-    while (1)
-    {
-        rc = snd_ctl_pcm_next_device(ctl, &dev);
-        if (rc < 0 || dev < 0)
-            break;
-
-        snd_pcm_info_set_device(pcminfo, (unsigned int)dev);
-        snd_pcm_info_set_subdevice(pcminfo, 0);
-        snd_pcm_info_set_stream(pcminfo, SND_PCM_STREAM_CAPTURE);
-        if (snd_ctl_pcm_info(ctl, pcminfo) >= 0)
-        {
-            found++;
-            if (stored < max_count)
-            {
-                const char *n = snd_pcm_info_get_name(pcminfo);
-                out[stored].dev = dev;
-                if (n && n[0] != '\0')
-                    snprintf(out[stored].name, sizeof(out[stored].name), "%s", n);
-                else
-                    snprintf(out[stored].name, sizeof(out[stored].name), "dev%d", dev);
-                stored++;
-            }
-        }
-    }
-
-    snd_pcm_info_free(pcminfo);
-    snd_ctl_close(ctl);
-    if (found > stored)
-    {
-        printf("capture PCM device list truncated: found=%d stored=%d\n", found, stored);
-    }
-    return stored;
 }
 
 static int wait_codec_playback_ready(unsigned int timeout_ms)
@@ -593,12 +503,9 @@ static int wait_codec_playback_ready(unsigned int timeout_ms)
     return -1;
 }
 
-static int start_alsaloop_process(int uac_card, int cap_dev, pid_t *pid_out)
+static int start_alsaloop_process(char *cap_dev, pid_t *pid_out)
 {
-    char cap_name[32];
     pid_t pid;
-
-    snprintf(cap_name, sizeof(cap_name), "hw:%d,%d", uac_card, cap_dev);
 
     pid = fork();
     if (pid < 0)
@@ -610,31 +517,29 @@ static int start_alsaloop_process(int uac_card, int cap_dev, pid_t *pid_out)
     if (pid == 0)
     {
         execl(USB_ALSALOOP_PATH, "alsaloop",
-              "-C", cap_name,
+              "-C", cap_dev,
               "-P", USB_CODEC_PLAYBACK_DEV,
               "-f", USB_AUDIO_FORMAT,
               "-c", "2",
               "-r", usb_audio_rate_str,
               "-t", USB_ALSALOOP_LATENCY_US,
-              "-S", "0",
+              "-S", "1",
+              "-b",
               (char *)NULL);
         _exit(127);
     }
 
     *pid_out = pid;
     printf("usb audio alsaloop started: %s -> %s pid=%d\n",
-           cap_name, USB_CODEC_PLAYBACK_DEV, (int)pid);
+           cap_dev, USB_CODEC_PLAYBACK_DEV, (int)pid);
     return 0;
 }
 
 static void *usb_audio_alsaloop_entry(void *arg)
 {
-    usb_capture_dev_t cap_devs[USB_MAX_CAPTURE_DEVS];
     pid_t loop_pid = 0;
-    int uac_card = -1;
-    int cap_count = 0;
-    int cap_dev = -1;
     int fail_count = 0;
+    bool high_speed = false;
 
     (void)arg;
 
@@ -648,7 +553,6 @@ static void *usb_audio_alsaloop_entry(void *arg)
             if (loop_pid > 0)
             {
                 stop_child_process(&loop_pid, "alsaloop");
-                cap_count = 0;
             }
             sleep_ms_local(200);
             continue;
@@ -665,33 +569,16 @@ static void *usb_audio_alsaloop_entry(void *arg)
             printf("usb audio alsaloop exited: pid=%d status=%d\n",
                    (int)loop_pid, status);
             loop_pid = 0;
-            cap_count = 0;
             sleep_ms_local(300);
             continue;
         }
 
-        if (find_uac_gadget_card(&uac_card) < 0)
-        {
-            fail_count++;
-            if ((fail_count % 10) == 1)
-                printf("alsaloop waiting for UAC card... (fail=%d)\n", fail_count);
-            sleep_ms_local(300);
-            continue;
-        }
+        if (wait_usb_current_speed(&high_speed, 50) == 0)
+            set_usb_audio_profile(high_speed);
+        else
+            set_usb_audio_profile(false);
 
-        cap_count = list_capture_pcm_devs_on_card(uac_card, cap_devs, USB_MAX_CAPTURE_DEVS);
-        if (cap_count <= 0)
-        {
-            fail_count++;
-            if ((fail_count % 10) == 1)
-                printf("alsaloop no capture PCM on UAC card %d yet (fail=%d)\n",
-                       uac_card, fail_count);
-            sleep_ms_local(300);
-            continue;
-        }
-
-        cap_dev = cap_devs[0].dev;
-        if (start_alsaloop_process(uac_card, cap_dev, &loop_pid) < 0)
+        if (start_alsaloop_process(USB_UAC_CAPTURE_DEV, &loop_pid) < 0)
         {
             fail_count++;
             sleep_ms_local(500);
@@ -773,9 +660,9 @@ static int configure_usb_gadget_composite(void)
     const char *stage = "unknown";
     struct usbg_gadget_attrs gadget_attrs = {
         .bcdUSB = 0x0200,
-        .bDeviceClass = 0x00,
-        .bDeviceSubClass = 0x00,
-        .bDeviceProtocol = 0x00,
+        .bDeviceClass = 0xEF,
+        .bDeviceSubClass = 0x02,
+        .bDeviceProtocol = 0x01,
         .bMaxPacketSize0 = 64,
         .idVendor = 0x1d6b,
         .idProduct = 0x0109,
@@ -893,18 +780,9 @@ static int configure_usb_gadget_for_current_speed(void)
     if (configure_usb_gadget_composite() < 0)
         return -1;
 
-    if (wait_usb_current_speed(&high_speed, 2500) < 0 || !high_speed)
-        return 0;
+    if (wait_usb_current_speed(&high_speed, 2500) == 0 && high_speed)
+        set_usb_audio_profile(true);
 
-    printf("usb high-speed detected, rebuild UAC2 gadget as 96kHz/24bit\n");
-    (void)unbind_usb_gadget_udc();
-    sleep_ms_local(100);
-
-    set_usb_audio_profile(true);
-    if (configure_usb_gadget_composite() < 0)
-        return -1;
-
-    (void)wait_usb_current_speed(&high_speed, 1500);
     return 0;
 }
 
