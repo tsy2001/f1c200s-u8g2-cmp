@@ -14,8 +14,6 @@
 #include "app_cdplayer.h"
 #include "logo.h"
 
-#define I2C_BUS 2
-
 static void sleep_ms_local(unsigned int ms)
 {
     struct timespec req;
@@ -48,7 +46,7 @@ void app_u8g2_wait(void)
 
 void *ui_thread_entry(void *arg)
 {
-    libu8g2_Setup(&u8g2, I2C_BUS);
+    libu8g2_Setup(&u8g2);
 
     while (1)
     {
@@ -192,11 +190,11 @@ void u8g2_cdplayer(void)
         u8g2_DrawGlyph(&u8g2, 0, 21, 484);  // 喇叭
         u8g2_DrawGlyph(&u8g2, 42, 21, 567); // 专辑
 
-        u8g2_SetFont(&u8g2, u8g2_font_misans_thin_9_ascii);
+        u8g2_SetFont(&u8g2, u8g2_font_missingplanet_t_all);
         sprintf(oled_buffer, "%02d", (int)(volume*100));
-        u8g2_DrawStr(&u8g2, 23, 15, oled_buffer); // 音量
+        u8g2_DrawStr(&u8g2, 23, 14, oled_buffer); // 音量
         sprintf(oled_buffer, "%02d/%02d", now_tracks - 1, total_tracks);
-        u8g2_DrawStr(&u8g2, 65, 15, oled_buffer);
+        u8g2_DrawStr(&u8g2, 65, 14, oled_buffer);
         if (album_ready_flag && (artist_buf[0] != '\0' || title_buf[0] != '\0'))
         {
             // artist_buf是否为空，空则显示Unknown(todo：个别情况异常需修复)

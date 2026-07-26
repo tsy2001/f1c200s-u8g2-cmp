@@ -51,7 +51,7 @@
 
 #define USB_MAX_CAPTURE_DEVS 8
 #define USB_CODEC_PLAYBACK_DEV "plughw:1,0"
-#define USB_UAC_CAPTURE_DEV "hw:2,0"
+#define USB_UAC_CAPTURE_DEV "hw:3,0"
 
 #define USB_ALSALOOP_PATH "/usr/bin/alsaloop"
 #define USB_ALSALOOP_LATENCY_US "100000"

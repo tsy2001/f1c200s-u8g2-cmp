@@ -287,7 +287,7 @@ void *button_handl_entry(void *arg)
             //beep_play_button(0);
         }
 
-        sleep_ms(20);
+        sleep_ms_local(20);
     }
 
     return NULL;

@@ -38,7 +38,7 @@ extern const uint8_t u8g2_font_streamline_all_t[] U8G2_FONT_SECTION("u8g2_font_s
 extern const uint8_t u8g2_font_spleen12x24_mf[] U8G2_FONT_SECTION("u8g2_font_spleen12x24_mf");
 extern const uint8_t u8g2_font_open_iconic_all_2x_t[] U8G2_FONT_SECTION("u8g2_font_open_iconic_all_2x_t");
 extern const uint8_t u8g2_font_spleen8x16_mf[] U8G2_FONT_SECTION("u8g2_font_spleen8x16_mf");
-
+extern const uint8_t u8g2_font_missingplanet_t_all[] U8G2_FONT_SECTION("u8g2_font_missingplanet_t_all");
 
 
 #ifdef __cplusplus

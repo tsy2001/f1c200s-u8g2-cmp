@@ -868,8 +868,6 @@ void *cd_player_thread_entry(void *arg)
 
 void app_cdplayer_start(void)
 {
-    int err = 0;
-
     pthread_mutex_lock(&app_cdio.lock);
     app_cdio.usb_pc_mode = 0;
     app_cdio.usb_mtp_mode = 0;
@@ -879,13 +877,6 @@ void app_cdplayer_start(void)
     app_cdio.return_to_menu = 0;
     app_cdio.volume = 0.2f;
     pthread_mutex_unlock(&app_cdio.lock);
-
-    err = cmp_module_open();
-    if (err != 0)
-    {
-        printf("Failed to open cmp-module device: %s\n", strerror(errno));
-        return;
-    }
 
     pthread_attr_init(&cd_thread_attr);
 
